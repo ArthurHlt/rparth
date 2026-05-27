@@ -1,7 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/ArthurHlt/rparth/app"
 	"github.com/ArthurHlt/rparth/config"
@@ -24,7 +29,30 @@ func (r *ServeCmd) Run() error {
 		return fmt.Errorf("read config: %w", err)
 	}
 	appRun := app.NewApp(cnf)
-	return appRun.RunServer()
+
+	// listen for signals SIGINT and SIGTERM
+	// in fact SIGINT is for getting ctrl+c when developing
+	// sigterm is for getting any orchestrator stop signal (like docker/k8s stop)
+	stopCtx, stopCancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopCancel()
+
+	forceCtx, forceCancel := context.WithCancel(context.Background())
+	defer forceCancel()
+
+	go func() {
+		<-stopCtx.Done()
+		slog.Info("Stop signal received, gracefully shutting down ...")
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		defer signal.Stop(sig)
+		// When developing you may not want to wait for the server to fully
+		// stop: a second SIGINT or SIGTERM forces an immediate exit.
+		s := <-sig
+		slog.Info("Second signal received, forcing stop.", "signal", s)
+		forceCancel()
+	}()
+
+	return appRun.RunServer(stopCtx, forceCtx)
 }
 
 type VersionCmd struct {

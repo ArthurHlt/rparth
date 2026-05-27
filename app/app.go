@@ -2,6 +2,8 @@ package app
 
 import (
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"time"
 
@@ -9,14 +11,36 @@ import (
 	"github.com/lmittmann/tint"
 )
 
+// HttpServerBuilder builds the *http.Server and its bound listener.
+// Returning a pre-bound listener lets RunServer call Serve(ln) instead of
+// ListenAndServe, so tests can inject an httptest-style listener without
+// racing on a free port.
+type HttpServerBuilder func(listenAddr string) (*http.Server, net.Listener, error)
+
+func defaultHttpServerBuilder(listenAddr string) (*http.Server, net.Listener, error) {
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &http.Server{Addr: listenAddr}, ln, nil
+}
+
 type App struct {
-	cnf *config.Config
+	cnf               *config.Config
+	httpServerBuilder HttpServerBuilder
 }
 
 func NewApp(cnf *config.Config) *App {
-	app := &App{cnf: cnf}
+	app := &App{cnf: cnf, httpServerBuilder: defaultHttpServerBuilder}
 	app.preInit()
 	return app
+}
+
+func (a *App) SetServerBuilder(builder HttpServerBuilder) {
+	if builder == nil {
+		panic("builder cannot be nil")
+	}
+	a.httpServerBuilder = builder
 }
 
 func (a *App) preInit() {
