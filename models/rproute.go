@@ -15,13 +15,15 @@ import (
 
 type RPRoutes []*RPRoute
 
+var ErrNoRoute = errors.New("no route found")
+
 func (rts *RPRoutes) FindRoute(req *http.Request) (*RPRoute, error) {
 	for _, route := range *rts {
 		if route.Match(req) {
 			return route, nil
 		}
 	}
-	return nil, errors.New("no route found")
+	return nil, ErrNoRoute
 }
 
 func (rts *RPRoutes) UnmarshalYAML(data []byte) error {

@@ -125,12 +125,12 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 			Expect(transport.received).To(BeNil())
 		})
 
-		It("returns 500 when the upstream transport errors", func() {
+		It("returns 502 when the upstream transport errors", func() {
 			transport.err = errors.New("dial failed")
 			req := newRequest("api.example.com:80", "/", nil)
 			p.ServeHTTP(w, req)
 
-			Expect(w.Code).To(Equal(http.StatusInternalServerError))
+			Expect(w.Code).To(Equal(http.StatusBadGateway))
 			Expect(w.Body.String()).To(ContainSubstring("dial failed"))
 		})
 	})

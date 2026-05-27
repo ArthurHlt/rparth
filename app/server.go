@@ -7,17 +7,20 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ArthurHlt/rparth/middlewares"
 	"github.com/ArthurHlt/rparth/proxy"
 )
 
 func (a *App) RunServer(stopCtx, forceCtx context.Context) error {
 	proxyHandler := proxy.NewProxy(proxy.DefaultProxyTransport(), a.cnf.Routes)
+	handler := middlewares.Chain(a.middlewares...)(proxyHandler)
+
 	servConf := a.cnf.Server
 	server, ln, err := a.httpServerBuilder(servConf.ListenAddr)
 	if err != nil {
 		return err
 	}
-	server.Handler = proxyHandler
+	server.Handler = handler
 	serverType := "http"
 	if servConf.Tls != nil {
 		serverType = "https"

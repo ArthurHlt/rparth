@@ -97,3 +97,14 @@ var _ = Describe("NewApp", func() {
 		Expect(slog.Default().Enabled(ctx, slog.LevelWarn)).To(BeFalse())
 	})
 })
+
+var _ = Describe("App.SetServerBuilder", func() {
+	It("panics when given a nil builder", func() {
+		a := app.NewApp(&config.Config{
+			Routes: models.RPRoutes{{Name: "api", Prefix: "/", Target: testutils.MustYamlParseURL("http://backend:8080")}},
+			Server: &config.Server{ListenAddr: ":0"},
+		})
+
+		Expect(func() { a.SetServerBuilder(nil) }).To(PanicWith("builder cannot be nil"))
+	})
+})

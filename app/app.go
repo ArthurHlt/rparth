@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ArthurHlt/rparth/config"
+	"github.com/ArthurHlt/rparth/middlewares"
 	"github.com/lmittmann/tint"
 )
 
@@ -28,12 +29,29 @@ func defaultHttpServerBuilder(listenAddr string) (*http.Server, net.Listener, er
 type App struct {
 	cnf               *config.Config
 	httpServerBuilder HttpServerBuilder
+	middlewares       []middlewares.Middleware
 }
 
 func NewApp(cnf *config.Config) *App {
+	app := NewAppBare(cnf)
+	app.middlewares = []middlewares.Middleware{
+		middlewares.AccessLog(cnf.Log.Level),
+		middlewares.Prometheus(),
+		middlewares.MetricsHttp(nil),
+	}
+	return app
+}
+
+// NewAppBare returns an App with no middlewares.
+// useful for testing.
+func NewAppBare(cnf *config.Config) *App {
 	app := &App{cnf: cnf, httpServerBuilder: defaultHttpServerBuilder}
 	app.preInit()
 	return app
+}
+
+func (a *App) SetMiddlewares(middlewares []middlewares.Middleware) {
+	a.middlewares = middlewares
 }
 
 func (a *App) SetServerBuilder(builder HttpServerBuilder) {
