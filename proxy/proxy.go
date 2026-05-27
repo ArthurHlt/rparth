@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ArthurHlt/rparth/contexts"
+	"github.com/ArthurHlt/rparth/middlewares"
 	"github.com/ArthurHlt/rparth/models"
 )
 
@@ -81,9 +83,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 func (p *Proxy) roundTrip(req *http.Request) (*http.Response, error) {
-	route, err := p.rpRoutes.FindRoute(req)
-	if err != nil {
-		return nil, err
+	route := contexts.GetRPRoute(req)
+	if route == nil {
+		return nil, models.ErrNoRoute
 	}
 	slog.Debug(
 		"route found",
@@ -210,7 +212,6 @@ func (p *Proxy) getClientIP(req *http.Request) string {
 	}
 	return ip
 }
-
 func (p *Proxy) getForwardedFor(req *http.Request) []string {
 	forwardedFor := req.Header.Get("X-Forwarded-For")
 	clientIp := p.getClientIP(req)
@@ -229,4 +230,13 @@ func (p *Proxy) getForwardedScheme(req *http.Request) string {
 		return "https"
 	}
 	return "http"
+}
+
+func (p *Proxy) MarkRPRouteRequest() middlewares.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			route, _ := p.rpRoutes.FindRoute(r)
+			next.ServeHTTP(w, contexts.SetRPRoute(r, route))
+		})
+	}
 }

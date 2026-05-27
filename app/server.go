@@ -13,7 +13,8 @@ import (
 
 func (a *App) RunServer(stopCtx, forceCtx context.Context) error {
 	proxyHandler := proxy.NewProxy(proxy.DefaultProxyTransport(), a.cnf.Routes)
-	handler := middlewares.Chain(a.middlewares...)(proxyHandler)
+	mds := append([]middlewares.Middleware{proxyHandler.MarkRPRouteRequest()}, a.middlewares...)
+	handler := middlewares.Chain(mds...)(proxyHandler)
 
 	servConf := a.cnf.Server
 	server, ln, err := a.httpServerBuilder(servConf.ListenAddr)

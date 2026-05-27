@@ -14,6 +14,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/ArthurHlt/rparth/contexts"
 	"github.com/ArthurHlt/rparth/models"
 	"github.com/ArthurHlt/rparth/proxy"
 )
@@ -56,6 +57,12 @@ func newRequest(host, path string, header http.Header) *http.Request {
 	}
 }
 
+// serve drives the request through MarkRPRouteRequest before ServeHTTP, the
+// way app.RunServer wires it.
+func serve(p *proxy.Proxy, w http.ResponseWriter, req *http.Request) {
+	p.MarkRPRouteRequest()(p).ServeHTTP(w, req)
+}
+
 var _ = Describe("Proxy.ServeHTTP", func() {
 	var (
 		transport *fakeTransport
@@ -85,7 +92,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 	Describe("happy path", func() {
 		It("returns the upstream status, headers, and body", func() {
 			req := newRequest("api.example.com:80", "/users/42", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(w.Code).To(Equal(http.StatusOK))
 			Expect(w.Header().Get("Content-Type")).To(Equal("text/plain"))
@@ -94,7 +101,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 
 		It("rewrites the forwarded URL scheme and host to the route target", func() {
 			req := newRequest("api.example.com:80", "/users/42", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received).NotTo(BeNil())
 			Expect(transport.received.URL.Scheme).To(Equal("http"))
@@ -108,7 +115,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 
 		It("does not mutate the original request URL", func() {
 			req := newRequest("api.example.com:80", "/users/42", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(req.URL.Host).To(BeEmpty())
 			Expect(req.URL.Scheme).To(BeEmpty())
@@ -118,7 +125,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 	Describe("error paths", func() {
 		It("returns 500 when no route matches", func() {
 			req := newRequest("unknown.example.com:80", "/", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(w.Code).To(Equal(http.StatusInternalServerError))
 			Expect(w.Body.String()).To(ContainSubstring("no route found"))
@@ -128,7 +135,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 		It("returns 502 when the upstream transport errors", func() {
 			transport.err = errors.New("dial failed")
 			req := newRequest("api.example.com:80", "/", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(w.Code).To(Equal(http.StatusBadGateway))
 			Expect(w.Body.String()).To(ContainSubstring("dial failed"))
@@ -143,7 +150,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 				"Upgrade":           []string{"websocket"},
 				"X-Custom-Tracking": []string{"abc"},
 			})
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			h := transport.received.Header
 			Expect(h.Get("Keep-Alive")).To(BeEmpty())
@@ -160,7 +167,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 				"X-Another":     []string{"value2"},
 				"X-Should-Stay": []string{"value3"},
 			})
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			h := transport.received.Header
 			Expect(h.Get("Connection")).To(BeEmpty())
@@ -176,7 +183,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 				"Content-Type":      []string{"text/plain"},
 			})
 			req := newRequest("api.example.com:80", "/", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(w.Header().Get("Keep-Alive")).To(BeEmpty())
 			Expect(w.Header().Get("Transfer-Encoding")).To(BeEmpty())
@@ -190,7 +197,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 				"X-Stay":     []string{"public"},
 			})
 			req := newRequest("api.example.com:80", "/", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(w.Header().Get("Connection")).To(BeEmpty())
 			Expect(w.Header().Get("X-Resp-Hop")).To(BeEmpty())
@@ -208,7 +215,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 
 		It("injects route headers into the forwarded request", func() {
 			req := newRequest("api.example.com:80", "/", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			h := transport.received.Header
 			Expect(h.Get("X-Forwarded-By")).To(Equal("rparth"))
@@ -219,7 +226,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 			req := newRequest("api.example.com:80", "/", http.Header{
 				"X-Tenant": []string{"attacker"},
 			})
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received.Header.Get("X-Tenant")).To(Equal("acme"))
 		})
@@ -241,7 +248,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 
 		It("dispatches to the route matching the request host", func() {
 			req := newRequest("web.example.com:80", "/dashboard", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received.URL.Host).To(Equal("web-backend:7000"))
 			Expect(transport.received.URL.Path).To(Equal("/dashboard"))
@@ -249,7 +256,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 
 		It("does not invoke the transport when no route matches", func() {
 			req := newRequest("nowhere.example.com:80", "/", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received).To(BeNil())
 			Expect(w.Code).To(Equal(http.StatusInternalServerError))
@@ -260,7 +267,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 		It("sets X-Forwarded-For to the client IP parsed from RemoteAddr", func() {
 			req := newRequest("api.example.com:80", "/", nil)
 			req.RemoteAddr = "203.0.113.7:54321"
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received.Header.Get("X-Forwarded-For")).To(Equal("203.0.113.7"))
 		})
@@ -268,7 +275,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 		It("falls back to the raw RemoteAddr when it has no port", func() {
 			req := newRequest("api.example.com:80", "/", nil)
 			req.RemoteAddr = "203.0.113.7"
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received.Header.Get("X-Forwarded-For")).To(Equal("203.0.113.7"))
 		})
@@ -278,7 +285,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 				"X-Forwarded-For": []string{"198.51.100.1, 198.51.100.2"},
 			})
 			req.RemoteAddr = "203.0.113.7:54321"
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received.Header.Get("X-Forwarded-For")).
 				To(Equal("198.51.100.1, 198.51.100.2, 203.0.113.7"))
@@ -287,7 +294,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 		It("sets X-Forwarded-Scheme to http for plain requests", func() {
 			req := newRequest("api.example.com:80", "/", nil)
 			req.RemoteAddr = "1.2.3.4:80"
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received.Header.Get("X-Forwarded-Scheme")).To(Equal("http"))
 		})
@@ -296,7 +303,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 			req := newRequest("api.example.com:80", "/", nil)
 			req.RemoteAddr = "1.2.3.4:80"
 			req.TLS = &tls.ConnectionState{}
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received.Header.Get("X-Forwarded-Scheme")).To(Equal("https"))
 		})
@@ -304,7 +311,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 		It("sets X-Forwarded-Host to the request Host field", func() {
 			req := newRequest("api.example.com:80", "/", nil)
 			req.RemoteAddr = "1.2.3.4:80"
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received.Header.Get("X-Forwarded-Host")).To(Equal("api.example.com:80"))
 		})
@@ -312,7 +319,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 		It("attaches the forwarding headers to the upstream request, not the client response", func() {
 			req := newRequest("api.example.com:80", "/", nil)
 			req.RemoteAddr = "203.0.113.7:54321"
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received.Header.Get("X-Forwarded-For")).To(Equal("203.0.113.7"))
 			Expect(transport.received.Header.Get("X-Forwarded-Scheme")).To(Equal("http"))
@@ -327,7 +334,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 			It("emits a single 'for' entry with by/host/proto for a fresh request", func() {
 				req := newRequest("api.example.com:80", "/", nil)
 				req.RemoteAddr = "203.0.113.7:54321"
-				p.ServeHTTP(w, req)
+				serve(p, w, req)
 
 				Expect(transport.received.Header.Get("Forwarded")).To(Equal(
 					"by=rparth;for=203.0.113.7;host=api.example.com:80;proto=http",
@@ -339,7 +346,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 					"X-Forwarded-For": []string{"198.51.100.1, 198.51.100.2"},
 				})
 				req.RemoteAddr = "203.0.113.7:54321"
-				p.ServeHTTP(w, req)
+				serve(p, w, req)
 
 				// Per RFC 7239, each proxy adds one Forwarded element for itself;
 				// the upstream chain is conveyed via X-Forwarded-For.
@@ -352,7 +359,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 				req := newRequest("api.example.com:80", "/", nil)
 				req.RemoteAddr = "203.0.113.7:54321"
 				req.TLS = &tls.ConnectionState{}
-				p.ServeHTTP(w, req)
+				serve(p, w, req)
 
 				Expect(transport.received.Header.Get("Forwarded")).To(Equal(
 					"by=rparth;for=203.0.113.7;host=api.example.com:80;proto=https",
@@ -369,7 +376,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 			apiRoute.StripPrefix = &trueVal
 
 			req := newRequest("api.example.com:80", "/api/users/42", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received.URL.Path).To(Equal("/users/42"))
 		})
@@ -379,7 +386,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 			apiRoute.StripPrefix = nil
 
 			req := newRequest("api.example.com:80", "/api/users/42", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received.URL.Path).To(Equal("/api/users/42"))
 		})
@@ -389,7 +396,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 			apiRoute.StripPrefix = &falseVal
 
 			req := newRequest("api.example.com:80", "/api/users/42", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received.URL.Path).To(Equal("/api/users/42"))
 		})
@@ -399,7 +406,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 			apiRoute.StripPrefix = &trueVal
 
 			req := newRequest("api.example.com:80", "/users/42", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			Expect(transport.received.URL.Path).To(Equal("/users/42"))
 		})
@@ -411,7 +418,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 			req := newRequest("api.example.com:80", "/", nil)
 
 			before := time.Now()
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			deadline, ok := transport.received.Context().Deadline()
 			Expect(ok).To(BeTrue())
@@ -423,7 +430,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 			apiRoute.Timeout = 0
 			req := newRequest("api.example.com:80", "/", nil)
 
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			_, ok := transport.received.Context().Deadline()
 			Expect(ok).To(BeFalse())
@@ -443,11 +450,135 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 
 			before := time.Now()
 			req := newRequest("web.example.com:80", "/dashboard", nil)
-			p.ServeHTTP(w, req)
+			serve(p, w, req)
 
 			deadline, ok := transport.received.Context().Deadline()
 			Expect(ok).To(BeTrue())
 			Expect(deadline).To(BeTemporally("~", before.Add(7*time.Second), 500*time.Millisecond))
 		})
+	})
+})
+
+// These specs exercise Proxy.ServeHTTP directly (without the MarkRPRouteRequest
+// wrapper) to pin down the contract between the two: ServeHTTP dispatches purely
+// off the route stored in the request context — it never calls FindRoute itself.
+var _ = Describe("Proxy.ServeHTTP route-from-context contract", func() {
+	var (
+		transport *fakeTransport
+		apiRoute  *models.RPRoute
+		p         *proxy.Proxy
+		w         *httptest.ResponseRecorder
+	)
+
+	BeforeEach(func() {
+		apiRoute = &models.RPRoute{
+			Name:   "api",
+			Host:   "api.example.com",
+			Prefix: "/",
+			Target: testutils.MustYamlParseURL("http://api-backend:9000"),
+		}
+		transport = &fakeTransport{
+			response: newResponse(http.StatusOK, "hello", http.Header{
+				"Content-Type": []string{"text/plain"},
+			}),
+		}
+		p = proxy.NewProxy(transport, models.RPRoutes{apiRoute})
+		w = httptest.NewRecorder()
+	})
+
+	It("returns 500 when called directly with no route in context", func() {
+		// Without MarkRPRouteRequest in front, no route is set on the
+		// context, so ServeHTTP must surface ErrNoRoute as a 500 even when
+		// the request would otherwise match a configured route.
+		req := newRequest("api.example.com:80", "/", nil)
+		p.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusInternalServerError))
+		Expect(w.Body.String()).To(ContainSubstring("no route found"))
+		Expect(transport.received).To(BeNil())
+	})
+
+	It("dispatches using the route in context, not by re-matching the request", func() {
+		// The route in context wins over what FindRoute would pick: we set
+		// apiRoute even though the request host doesn't match it, to prove
+		// ServeHTTP doesn't re-match.
+		req := newRequest("does-not-match.example.com:80", "/users/42", nil)
+		req = contexts.SetRPRoute(req, apiRoute)
+		p.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect(transport.received).NotTo(BeNil())
+		Expect(transport.received.URL.Host).To(Equal("api-backend:9000"))
+		Expect(transport.received.Host).To(Equal("api-backend:9000"))
+	})
+})
+
+var _ = Describe("Proxy.MarkRPRouteRequest middleware", func() {
+	var (
+		apiRoute *models.RPRoute
+		webRoute *models.RPRoute
+		p        *proxy.Proxy
+		w        *httptest.ResponseRecorder
+	)
+
+	BeforeEach(func() {
+		apiRoute = &models.RPRoute{
+			Name:   "api",
+			Host:   "api.example.com",
+			Prefix: "/",
+			Target: testutils.MustYamlParseURL("http://api-backend:9000"),
+		}
+		webRoute = &models.RPRoute{
+			Name:   "web",
+			Host:   "web.example.com",
+			Prefix: "/",
+			Target: testutils.MustYamlParseURL("http://web-backend:7000"),
+		}
+		// The transport is irrelevant here — the middleware never reaches it.
+		p = proxy.NewProxy(&fakeTransport{}, models.RPRoutes{apiRoute, webRoute})
+		w = httptest.NewRecorder()
+	})
+
+	It("stores the matched route in the request context for downstream handlers", func() {
+		var seen *models.RPRoute
+		next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			seen = contexts.GetRPRoute(r)
+		})
+
+		req := newRequest("web.example.com:80", "/dashboard", nil)
+		p.MarkRPRouteRequest()(next).ServeHTTP(w, req)
+
+		Expect(seen).To(BeIdenticalTo(webRoute))
+	})
+
+	It("calls next without a route in context when no route matches", func() {
+		// Critical for observability: even unmatched requests must reach the
+		// access-log and metrics middlewares (which then label them as
+		// route_name="unknown"). The middleware must not short-circuit here.
+		nextCalled := false
+		var seen *models.RPRoute
+		next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			nextCalled = true
+			seen = contexts.GetRPRoute(r)
+		})
+
+		req := newRequest("nowhere.example.com:80", "/", nil)
+		p.MarkRPRouteRequest()(next).ServeHTTP(w, req)
+
+		Expect(nextCalled).To(BeTrue())
+		Expect(seen).To(BeNil())
+	})
+
+	It("does not mutate the caller's request — only next sees the route in context", func() {
+		// req.WithContext returns a new *http.Request; the original passed
+		// to the middleware stays untouched so handler boundaries don't leak.
+		next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			Expect(contexts.GetRPRoute(r)).NotTo(BeNil())
+		})
+
+		req := newRequest("api.example.com:80", "/", nil)
+		p.MarkRPRouteRequest()(next).ServeHTTP(w, req)
+
+		Expect(contexts.GetRPRoute(req)).To(BeNil())
 	})
 })

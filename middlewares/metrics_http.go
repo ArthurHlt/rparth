@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ArthurHlt/rparth/contexts"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -15,7 +16,7 @@ var (
 			Name: "http_requests_total",
 			Help: "Total number of HTTP requests",
 		},
-		[]string{"method", "path", "status"},
+		[]string{"route_name", "method", "status"},
 	)
 
 	httpRequestDuration = promauto.NewHistogramVec(
@@ -24,22 +25,18 @@ var (
 			Help:    "HTTP request duration in seconds",
 			Buckets: prometheus.DefBuckets,
 		},
-		[]string{"method", "path", "status"},
+		[]string{"route_name", "method", "status"},
 	)
 )
 
-// MetricsHttp records request count and duration labelled by method, path
-// and status.
-// pass a templating pathFn (e.g. "/users/123" → "/users/{id}") in front of unbounded paths
-// to avoid a Prometheus cardinality explosion (and sad OOM).
-// by default, pathFn is the request URL path if nil.
-func MetricsHttp(pathFn func(*http.Request) string) Middleware {
-	if pathFn == nil {
-		pathFn = func(r *http.Request) string { return r.URL.Path }
-	}
+func MetricsHttp() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			path := pathFn(r)
+			route := contexts.GetRPRoute(r)
+			routeName := "unknown"
+			if route != nil {
+				routeName = route.Name
+			}
 			start := time.Now()
 			rw := newResponseWriter(w)
 
@@ -48,8 +45,8 @@ func MetricsHttp(pathFn func(*http.Request) string) Middleware {
 			status := strconv.Itoa(rw.statusCode)
 			duration := time.Since(start).Seconds()
 
-			httpRequestsTotal.WithLabelValues(r.Method, path, status).Inc()
-			httpRequestDuration.WithLabelValues(r.Method, path, status).Observe(duration)
+			httpRequestsTotal.WithLabelValues(routeName, r.Method, status).Inc()
+			httpRequestDuration.WithLabelValues(routeName, r.Method, status).Observe(duration)
 		})
 	}
 }

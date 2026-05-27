@@ -37,7 +37,7 @@ func NewApp(cnf *config.Config) *App {
 	app.middlewares = []middlewares.Middleware{
 		middlewares.AccessLog(cnf.Log.Level),
 		middlewares.Prometheus(),
-		middlewares.MetricsHttp(nil),
+		middlewares.MetricsHttp(),
 	}
 	return app
 }
