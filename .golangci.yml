@@ -9,7 +9,9 @@ linters:
         - '(*github.com/cespare/xxhash/v2.Digest).WriteString'
         - '(*github.com/cespare/xxhash/v2.Digest).Write'
         - '(net/http.ResponseWriter).Write'
+        - '(net.Listener).Close'
         - '(io.Closer).Close'
+        - '(*os.File).Close'
         - 'github.com/prometheus/common/expfmt.MetricFamilyToText'
 
 issues:

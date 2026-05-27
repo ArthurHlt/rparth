@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ArthurHlt/rparth/testutils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/ArthurHlt/rparth/models"
 	"github.com/ArthurHlt/rparth/proxy"
 )
-
 
 // fakeTransport captures the request it receives and returns a programmable response (or error).
 type fakeTransport struct {
@@ -31,12 +31,6 @@ func (f *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, f.err
 	}
 	return f.response, nil
-}
-
-func mustParseURL(raw string) *url.URL {
-	u, err := url.Parse(raw)
-	Expect(err).NotTo(HaveOccurred())
-	return u
 }
 
 func newResponse(status int, body string, headers http.Header) *http.Response {
@@ -76,7 +70,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 			Name:   "api",
 			Host:   "api.example.com",
 			Prefix: "/",
-			Target: mustParseURL("http://api-backend:9000"),
+			Target: testutils.MustYamlParseURL("http://api-backend:9000"),
 		}
 		routes = models.RPRoutes{apiRoute}
 		transport = &fakeTransport{
@@ -239,7 +233,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 				Name:   "web",
 				Host:   "web.example.com",
 				Prefix: "/",
-				Target: mustParseURL("http://web-backend:7000"),
+				Target: testutils.MustYamlParseURL("http://web-backend:7000"),
 			}
 			routes = models.RPRoutes{apiRoute, webRoute}
 			p = proxy.NewProxy(transport, routes)
@@ -440,7 +434,7 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 				Name:    "web",
 				Host:    "web.example.com",
 				Prefix:  "/",
-				Target:  mustParseURL("http://web-backend:7000"),
+				Target:  testutils.MustYamlParseURL("http://web-backend:7000"),
 				Timeout: 7,
 			}
 			apiRoute.Timeout = 3

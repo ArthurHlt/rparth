@@ -4,17 +4,12 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/ArthurHlt/rparth/testutils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/ArthurHlt/rparth/models"
 )
-
-func mustParseURL(raw string) *url.URL {
-	u, err := url.Parse(raw)
-	Expect(err).NotTo(HaveOccurred())
-	return u
-}
 
 func newRequest(host, path string) *http.Request {
 	return &http.Request{
@@ -31,7 +26,7 @@ var _ = Describe("RPRoute", func() {
 			Name:   "api",
 			Host:   "api.example.com",
 			Prefix: "/v1",
-			Target: mustParseURL("http://backend:8080"),
+			Target: testutils.MustYamlParseURL("http://backend:8080"),
 		}
 	})
 
@@ -165,13 +160,13 @@ var _ = Describe("RPRoutes.FindRoute", func() {
 			Name:   "api",
 			Host:   "api.example.com",
 			Prefix: "/v1",
-			Target: mustParseURL("http://api-backend:8080"),
+			Target: testutils.MustYamlParseURL("http://api-backend:8080"),
 		}
 		webRoute = &models.RPRoute{
 			Name:   "web",
 			Host:   "web.example.com",
 			Prefix: "/",
-			Target: mustParseURL("http://web-backend:8080"),
+			Target: testutils.MustYamlParseURL("http://web-backend:8080"),
 		}
 		routes = models.RPRoutes{apiRoute, webRoute}
 	})
@@ -191,7 +186,7 @@ var _ = Describe("RPRoutes.FindRoute", func() {
 	})
 
 	It("returns the first matching route when several could match", func() {
-		t := mustParseURL("http://t:80")
+		t := testutils.MustYamlParseURL("http://t:80")
 		rs := models.RPRoutes{
 			{Name: "first", Prefix: "/", Target: t},
 			{Name: "second", Prefix: "/", Target: t},

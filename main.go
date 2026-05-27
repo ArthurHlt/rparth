@@ -1,42 +1,47 @@
 package main
 
 import (
-	"log/slog"
-	"net/http"
-	"net/url"
-	"os"
+	"fmt"
 
-	"github.com/ArthurHlt/rparth/models"
-	"github.com/ArthurHlt/rparth/proxy"
+	"github.com/ArthurHlt/rparth/app"
+	"github.com/ArthurHlt/rparth/config"
+	"github.com/alecthomas/kong"
 )
 
-func urlMustParse(raw string) *url.URL {
-	u, err := url.Parse(raw)
+var (
+	version = "0.0.1-dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
+type ServeCmd struct {
+	ConfigPath string `short:"c" help:"path to the configuration file" type:"path" default:"./config.yml"`
+}
+
+func (r *ServeCmd) Run() error {
+	cnf, err := config.ReadConfig(r.ConfigPath)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("read config: %w", err)
 	}
-	return u
+	appRun := app.NewApp(cnf)
+	return appRun.RunServer()
+}
+
+type VersionCmd struct {
+}
+
+func (l *VersionCmd) Run() error {
+	fmt.Printf("rparth %s, commit %s, built at %s\n", version, commit, date)
+	return nil
+}
+
+var cli struct {
+	Serve   ServeCmd   `cmd:"" help:"Run server."`
+	Version VersionCmd `cmd:"" help:"Show version."`
 }
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	rts := models.RPRoutes{
-		{
-			Name:   "example-route-host",
-			Host:   "httpbin.local",
-			Target: urlMustParse("http://httpbin.org/"),
-		},
-		{
-			Name:   "example-route-prefix",
-			Prefix: "/httpbin",
-			Target: urlMustParse("http://httpbin.org/"),
-		},
-	}
-	err := rts.Validate()
-	if err != nil {
-		panic(err)
-	}
-	rparthProxy := proxy.NewProxy(proxy.DefaultProxyTransport(), rts)
-	slog.Info("starting rparth proxy at http://127.0.0.1:8080")
-	panic(http.ListenAndServe("127.0.0.1:8080", rparthProxy))
+	ctx := kong.Parse(&cli)
+	err := ctx.Run()
+	ctx.FatalIfErrorf(err)
 }

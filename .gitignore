@@ -1,0 +1,5 @@
+/config*.yml
+!/config.sample.yml
+/rparth
+/*.crt
+/*.key
