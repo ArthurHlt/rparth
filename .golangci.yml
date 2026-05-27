@@ -1,0 +1,19 @@
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      exclude-functions:
+        - io/ioutil.ReadFile
+        - io.WriteString
+        - '(*github.com/cespare/xxhash/v2.Digest).WriteString'
+        - '(*github.com/cespare/xxhash/v2.Digest).Write'
+        - '(net/http.ResponseWriter).Write'
+        - '(io.Closer).Close'
+        - 'github.com/prometheus/common/expfmt.MetricFamilyToText'
+
+issues:
+  exclude-rules:
+    - path: '(.+)_test\.go'
+      linters:
+        - typecheck
