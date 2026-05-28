@@ -32,6 +32,21 @@ archives:
       - CHANGELOG*
 
 
+dockers_v2:
+  - id: rparth
+    images:
+      - ghcr.io/arthurhlt/rparth
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    dockerfile: Dockerfile
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.source: "https://github.com/ArthurHlt/rparth"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+
 checksum:
   name_template: checksums.txt
   algorithm: sha256
