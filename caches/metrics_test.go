@@ -4,34 +4,12 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/mock/gomock"
 
 	"github.com/ArthurHlt/rparth/caches"
+	"github.com/ArthurHlt/rparth/caches/mocks"
 	"github.com/ArthurHlt/rparth/models"
 )
-
-// fakeStore is a minimal caches.Cache implementation that lets us script
-// Get/Contains/Len independently so we can assert how CacheMetrics maps the
-// underlying store length onto the cache_size gauge.
-type fakeStore struct {
-	getReturns  *models.CacheData
-	getOk       bool
-	lenReturns  int
-	lastSetKey  string
-	lastSetData *models.CacheData
-}
-
-func (f *fakeStore) Get(string) (*models.CacheData, bool) {
-	return f.getReturns, f.getOk
-}
-
-func (f *fakeStore) Set(key string, data *models.CacheData) {
-	f.lastSetKey = key
-	f.lastSetData = data
-}
-
-func (f *fakeStore) Close() error { return nil }
-
-func (f *fakeStore) Len() int { return f.lenReturns }
 
 // metricValue reads a single-cell counter or gauge from the default
 // Prometheus registry by name. The caches/metrics.go vars are registered on
@@ -77,25 +55,31 @@ func observationCount(name string) uint64 {
 
 var _ = Describe("CacheMetrics", func() {
 	var (
-		store *fakeStore
-		cache *caches.CacheMetrics
+		store  *mocks.MockCache
+		cache  *caches.CacheMetrics
+		lenVal int
 	)
 
 	BeforeEach(func() {
-		store = &fakeStore{}
+		ctrl := gomock.NewController(GinkgoT())
+		store = mocks.NewMockCache(ctrl)
+		lenVal = 0
+		// cache_size is a scrape-time GaugeFunc, so Len is consulted whenever the
+		// registry is gathered; Close runs on teardown. Both are incidental to the
+		// behavior each spec asserts, hence AnyTimes.
+		store.EXPECT().Len().DoAndReturn(func() int { return lenVal }).AnyTimes()
+		store.EXPECT().Close().Return(nil).AnyTimes()
 		cache = caches.NewCacheMetrics(store)
 	})
-	
+
 	AfterEach(func() {
-		err := cache.Close()
-		Expect(err).NotTo(HaveOccurred())
+		Expect(cache.Close()).To(Succeed())
 	})
 
 	Describe("Get", func() {
 		It("delegates to the underlying store and returns the payload on a hit", func() {
 			payload := &models.CacheData{Status: 200, Body: []byte("hi")}
-			store.getReturns = payload
-			store.getOk = true
+			store.EXPECT().Get("a").Return(payload, true)
 
 			data, ok := cache.Get("a")
 			Expect(ok).To(BeTrue())
@@ -103,7 +87,7 @@ var _ = Describe("CacheMetrics", func() {
 		})
 
 		It("returns (nil, false) when the store reports a miss", func() {
-			store.getOk = false
+			store.EXPECT().Get("absent").Return(nil, false)
 
 			data, ok := cache.Get("absent")
 			Expect(ok).To(BeFalse())
@@ -114,8 +98,7 @@ var _ = Describe("CacheMetrics", func() {
 			beforeHits := metricValue("cache_hits_total")
 			beforeLatency := observationCount("cache_lookup_latency_seconds")
 
-			store.getReturns = &models.CacheData{Status: 200}
-			store.getOk = true
+			store.EXPECT().Get("a").Return(&models.CacheData{Status: 200}, true)
 			cache.Get("a")
 
 			Expect(metricValue("cache_hits_total") - beforeHits).To(Equal(float64(1)))
@@ -125,33 +108,25 @@ var _ = Describe("CacheMetrics", func() {
 		It("increments cache_misses_total on a miss", func() {
 			before := metricValue("cache_misses_total")
 
-			store.getOk = false
+			store.EXPECT().Get("absent").Return(nil, false)
 			cache.Get("absent")
 
 			Expect(metricValue("cache_misses_total") - before).To(Equal(float64(1)))
 		})
-
-		It("updates cache_size to the underlying store length", func() {
-			store.getOk = false
-			store.lenReturns = 4
-			cache.Get("absent")
-
-			Expect(metricValue("cache_size")).To(Equal(float64(4)))
-		})
 	})
 
 	Describe("Set", func() {
-		It("delegates to the underlying store", func() {
+		It("forwards the key and data to the underlying store", func() {
 			payload := &models.CacheData{Status: 201, Body: []byte("bye")}
+			store.EXPECT().Set("k", payload)
+
 			cache.Set("k", payload)
-
-			Expect(store.lastSetKey).To(Equal("k"))
-			Expect(store.lastSetData).To(BeIdenticalTo(payload))
 		})
+	})
 
-		It("updates cache_size to the underlying store length", func() {
-			store.lenReturns = 3
-			cache.Set("k", &models.CacheData{Status: 200})
+	Describe("cache_size", func() {
+		It("reports the underlying store length", func() {
+			lenVal = 3
 			Expect(metricValue("cache_size")).To(Equal(float64(3)))
 		})
 	})

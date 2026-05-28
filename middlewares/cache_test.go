@@ -4,68 +4,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 
 	"github.com/ArthurHlt/rparth/testutils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 
+	"github.com/ArthurHlt/rparth/caches/mocks"
 	"github.com/ArthurHlt/rparth/contexts"
 	"github.com/ArthurHlt/rparth/middlewares"
 	"github.com/ArthurHlt/rparth/models"
 )
-
-type fakeCache struct {
-	mu       sync.Mutex
-	data     map[string]*models.CacheData
-	getCalls []string
-	setCalls []string
-}
-
-func (f *fakeCache) Close() error {
-	return nil
-}
-
-func newFakeCache() *fakeCache {
-	return &fakeCache{data: map[string]*models.CacheData{}}
-}
-
-func (f *fakeCache) Get(key string) (*models.CacheData, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.getCalls = append(f.getCalls, key)
-	d, ok := f.data[key]
-	return d, ok
-}
-
-func (f *fakeCache) Set(key string, data *models.CacheData) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.setCalls = append(f.setCalls, key)
-	f.data[key] = data
-}
-
-func (f *fakeCache) Delete(key string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.data, key)
-}
-
-func (f *fakeCache) onlyEntry() *models.CacheData {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	Expect(f.data).To(HaveLen(1))
-	for _, v := range f.data {
-		return v
-	}
-	return nil
-}
-
-func (f *fakeCache) Len() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.data)
-}
 
 type flushRecorder struct {
 	*httptest.ResponseRecorder
@@ -80,14 +29,43 @@ func (f *flushRecorder) Flush() { f.flushes++ }
 
 var _ = Describe("Cache middleware", func() {
 	var (
-		store      *fakeCache
+		store      *mocks.MockCache
+		data       map[string]*models.CacheData
+		getCalls   []string
+		setCalls   []string
 		nextCalled int
 	)
 
 	BeforeEach(func() {
-		store = newFakeCache()
+		store = mocks.NewMockCache(gomock.NewController(GinkgoT()))
+		data = map[string]*models.CacheData{}
+		getCalls = nil
+		setCalls = nil
 		nextCalled = 0
+
+		// Back the mock with an in-memory map so Set→Get round-trips like a real
+		// store, while recording the keys touched for assertions.
+		store.EXPECT().Get(gomock.Any()).DoAndReturn(func(key string) (*models.CacheData, bool) {
+			getCalls = append(getCalls, key)
+			d, ok := data[key]
+			return d, ok
+		}).AnyTimes()
+		store.EXPECT().Set(gomock.Any(), gomock.Any()).DoAndReturn(func(key string, d *models.CacheData) {
+			setCalls = append(setCalls, key)
+			data[key] = d
+		}).AnyTimes()
+		store.EXPECT().Len().DoAndReturn(func() int { return len(data) }).AnyTimes()
+		store.EXPECT().Close().Return(nil).AnyTimes()
 	})
+
+	onlyEntry := func() *models.CacheData {
+		GinkgoHelper()
+		Expect(data).To(HaveLen(1))
+		for _, v := range data {
+			return v
+		}
+		return nil
+	}
 
 	build := func(maxBodySize int, next http.Handler) http.Handler {
 		return middlewares.Cache(middlewares.NewCacheHandler(store, maxBodySize))(next)
@@ -108,8 +86,8 @@ var _ = Describe("Cache middleware", func() {
 			Expect(nextCalled).To(Equal(1))
 			Expect(rec.Code).To(Equal(http.StatusCreated))
 			Expect(rec.Body.String()).To(Equal("created"))
-			Expect(store.getCalls).To(BeEmpty())
-			Expect(store.setCalls).To(BeEmpty())
+			Expect(getCalls).To(BeEmpty())
+			Expect(setCalls).To(BeEmpty())
 		})
 	})
 
@@ -131,7 +109,7 @@ var _ = Describe("Cache middleware", func() {
 			Expect(rec.Body.String()).To(Equal("hello"))
 			Expect(rec.Header().Get("X-Cache")).To(BeEmpty())
 
-			cached := store.onlyEntry()
+			cached := onlyEntry()
 			Expect(cached.Status).To(Equal(http.StatusOK))
 			Expect(string(cached.Body)).To(Equal("hello"))
 			Expect(http.Header(cached.Headers).Get("Content-Type")).To(Equal("text/plain"))
@@ -146,7 +124,7 @@ var _ = Describe("Cache middleware", func() {
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, "/foo", "r1"))
 
-			cached := store.onlyEntry()
+			cached := onlyEntry()
 			Expect(cached.Status).To(Equal(http.StatusOK))
 			Expect(string(cached.Body)).To(Equal("body"))
 		})
@@ -163,7 +141,7 @@ var _ = Describe("Cache middleware", func() {
 			h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, "/foo", "r1"))
 
 			Expect(rec.Body.String()).To(Equal("alpha-beta-gamma"))
-			Expect(string(store.onlyEntry().Body)).To(Equal("alpha-beta-gamma"))
+			Expect(string(onlyEntry().Body)).To(Equal("alpha-beta-gamma"))
 		})
 
 		It("does not cache responses that carry Set-Cookie, to avoid replaying one client's session to another", func() {
@@ -180,7 +158,7 @@ var _ = Describe("Cache middleware", func() {
 			Expect(rec.Code).To(Equal(http.StatusOK))
 			Expect(rec.Body.String()).To(Equal("hi"))
 			Expect(rec.Header().Get("Set-Cookie")).To(Equal("session=abc; Path=/"))
-			Expect(store.setCalls).To(BeEmpty())
+			Expect(setCalls).To(BeEmpty())
 		})
 	})
 
@@ -222,7 +200,7 @@ var _ = Describe("Cache middleware", func() {
 
 			Expect(rec.Code).To(Equal(http.StatusOK))
 			Expect(rec.Body.String()).To(Equal(payload))
-			Expect(store.setCalls).To(BeEmpty())
+			Expect(setCalls).To(BeEmpty())
 		})
 
 		It("treats maxBodySize <= 0 as unlimited", func() {
@@ -234,7 +212,7 @@ var _ = Describe("Cache middleware", func() {
 
 			h.ServeHTTP(httptest.NewRecorder(), testutils.RequestWithRoute(http.MethodGet, "/big", "r1"))
 
-			Expect(string(store.onlyEntry().Body)).To(Equal(payload))
+			Expect(string(onlyEntry().Body)).To(Equal(payload))
 		})
 
 		It("triggers the cutoff across chunked writes that together exceed the limit", func() {
@@ -248,7 +226,7 @@ var _ = Describe("Cache middleware", func() {
 			h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, "/chunked", "r1"))
 
 			Expect(rec.Body.Len()).To(Equal(1200))
-			Expect(store.setCalls).To(BeEmpty())
+			Expect(setCalls).To(BeEmpty())
 		})
 	})
 
@@ -268,7 +246,7 @@ var _ = Describe("Cache middleware", func() {
 
 			Expect(rec.Code).To(Equal(http.StatusNotFound))
 			Expect(rec.Body.String()).To(Equal("body"))
-			Expect(store.setCalls).To(BeEmpty())
+			Expect(setCalls).To(BeEmpty())
 		})
 
 		It("does not cache 5xx responses", func() {
@@ -278,7 +256,7 @@ var _ = Describe("Cache middleware", func() {
 			h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, "/boom", "r1"))
 
 			Expect(rec.Code).To(Equal(http.StatusInternalServerError))
-			Expect(store.setCalls).To(BeEmpty())
+			Expect(setCalls).To(BeEmpty())
 		})
 
 		It("does not cache 1xx responses", func() {
@@ -287,7 +265,7 @@ var _ = Describe("Cache middleware", func() {
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, "/early", "r1"))
 
-			Expect(store.setCalls).To(BeEmpty())
+			Expect(setCalls).To(BeEmpty())
 		})
 
 		It("caches 3xx redirects", func() {
@@ -297,8 +275,8 @@ var _ = Describe("Cache middleware", func() {
 			h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, "/redir", "r1"))
 
 			Expect(rec.Code).To(Equal(http.StatusMovedPermanently))
-			Expect(store.setCalls).To(HaveLen(1))
-			Expect(store.onlyEntry().Status).To(Equal(http.StatusMovedPermanently))
+			Expect(setCalls).To(HaveLen(1))
+			Expect(onlyEntry().Status).To(Equal(http.StatusMovedPermanently))
 		})
 	})
 
@@ -315,8 +293,8 @@ var _ = Describe("Cache middleware", func() {
 			h.ServeHTTP(httptest.NewRecorder(), req)
 
 			Expect(nextCalled).To(Equal(1))
-			Expect(store.getCalls).To(BeEmpty())
-			Expect(store.setCalls).To(BeEmpty())
+			Expect(getCalls).To(BeEmpty())
+			Expect(setCalls).To(BeEmpty())
 		})
 
 		It("bypasses the cache when the request carries Cache-Control: no-cache", func() {
@@ -329,8 +307,8 @@ var _ = Describe("Cache middleware", func() {
 			req.Header.Set("Cache-Control", "no-cache")
 			h.ServeHTTP(httptest.NewRecorder(), req)
 
-			Expect(store.getCalls).To(BeEmpty())
-			Expect(store.setCalls).To(BeEmpty())
+			Expect(getCalls).To(BeEmpty())
+			Expect(setCalls).To(BeEmpty())
 		})
 
 		It("parses comma-separated request directives", func() {
@@ -343,7 +321,7 @@ var _ = Describe("Cache middleware", func() {
 			req.Header.Set("Cache-Control", "max-age=0, no-store")
 			h.ServeHTTP(httptest.NewRecorder(), req)
 
-			Expect(store.setCalls).To(BeEmpty())
+			Expect(setCalls).To(BeEmpty())
 		})
 	})
 
@@ -367,7 +345,7 @@ var _ = Describe("Cache middleware", func() {
 
 				Expect(rec.Code).To(Equal(http.StatusOK))
 				Expect(rec.Body.String()).To(Equal("body"))
-				Expect(store.setCalls).To(BeEmpty())
+				Expect(setCalls).To(BeEmpty())
 			},
 			Entry("Cache-Control: no-store", "Cache-Control", "no-store"),
 			Entry("Cache-Control: no-cache", "Cache-Control", "no-cache"),
@@ -384,7 +362,7 @@ var _ = Describe("Cache middleware", func() {
 			h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, "/foo", "r1"))
 
 			Expect(rec.Code).To(Equal(http.StatusOK))
-			Expect(store.setCalls).To(HaveLen(1))
+			Expect(setCalls).To(HaveLen(1))
 		})
 	})
 
@@ -399,8 +377,8 @@ var _ = Describe("Cache middleware", func() {
 			h.ServeHTTP(httptest.NewRecorder(), testutils.RequestWithRoute(http.MethodGet, "/same", "r1"))
 			h.ServeHTTP(httptest.NewRecorder(), testutils.RequestWithRoute(http.MethodGet, "/same", "r2"))
 
-			Expect(store.setCalls).To(HaveLen(2))
-			Expect(store.setCalls[0]).NotTo(Equal(store.setCalls[1]))
+			Expect(setCalls).To(HaveLen(2))
+			Expect(setCalls[0]).NotTo(Equal(setCalls[1]))
 		})
 
 		It("differs across URLs for the same route", func() {
@@ -412,8 +390,8 @@ var _ = Describe("Cache middleware", func() {
 			h.ServeHTTP(httptest.NewRecorder(), testutils.RequestWithRoute(http.MethodGet, "/a", "r1"))
 			h.ServeHTTP(httptest.NewRecorder(), testutils.RequestWithRoute(http.MethodGet, "/b", "r1"))
 
-			Expect(store.setCalls).To(HaveLen(2))
-			Expect(store.setCalls[0]).NotTo(Equal(store.setCalls[1]))
+			Expect(setCalls).To(HaveLen(2))
+			Expect(setCalls[0]).NotTo(Equal(setCalls[1]))
 		})
 
 		It("differs by Authorization header so two users don't share a cached response", func() {
@@ -432,8 +410,8 @@ var _ = Describe("Cache middleware", func() {
 			h.ServeHTTP(httptest.NewRecorder(), req2)
 
 			Expect(nextCalled).To(Equal(2))
-			Expect(store.setCalls).To(HaveLen(2))
-			Expect(store.setCalls[0]).NotTo(Equal(store.setCalls[1]))
+			Expect(setCalls).To(HaveLen(2))
+			Expect(setCalls[0]).NotTo(Equal(setCalls[1]))
 		})
 
 		It("reuses the cache entry when Authorization repeats", func() {
@@ -472,8 +450,8 @@ var _ = Describe("Cache middleware", func() {
 			h.ServeHTTP(httptest.NewRecorder(), req2)
 
 			Expect(nextCalled).To(Equal(2))
-			Expect(store.setCalls).To(HaveLen(2))
-			Expect(store.setCalls[0]).NotTo(Equal(store.setCalls[1]))
+			Expect(setCalls).To(HaveLen(2))
+			Expect(setCalls[0]).NotTo(Equal(setCalls[1]))
 		})
 
 		It("treats a request with no Authorization as distinct from one carrying any value", func() {
@@ -489,8 +467,8 @@ var _ = Describe("Cache middleware", func() {
 			h.ServeHTTP(httptest.NewRecorder(), req2)
 
 			Expect(nextCalled).To(Equal(2))
-			Expect(store.setCalls).To(HaveLen(2))
-			Expect(store.setCalls[0]).NotTo(Equal(store.setCalls[1]))
+			Expect(setCalls).To(HaveLen(2))
+			Expect(setCalls[0]).NotTo(Equal(setCalls[1]))
 		})
 	})
 
@@ -508,7 +486,7 @@ var _ = Describe("Cache middleware", func() {
 
 			Expect(rec.flushes).To(Equal(1))
 			Expect(rec.Body.String()).To(Equal("part-rest"))
-			Expect(string(store.onlyEntry().Body)).To(Equal("part-rest"))
+			Expect(string(onlyEntry().Body)).To(Equal("part-rest"))
 		})
 
 		It("is a no-op when the underlying writer does not implement http.Flusher", func() {
@@ -599,8 +577,8 @@ var _ = Describe("Cache middleware", func() {
 			h.ServeHTTP(httptest.NewRecorder(), req)
 
 			Expect(nextCalled).To(Equal(2), "next should be called every time for NoCache routes")
-			Expect(store.getCalls).To(BeEmpty(), "cache.Get should never be consulted")
-			Expect(store.setCalls).To(BeEmpty(), "responses must not be stored")
+			Expect(getCalls).To(BeEmpty(), "cache.Get should never be consulted")
+			Expect(setCalls).To(BeEmpty(), "responses must not be stored")
 		})
 
 		It("still caches when NoCache is false (default)", func() {
@@ -615,7 +593,7 @@ var _ = Describe("Cache middleware", func() {
 			req = contexts.SetRPRoute(req, &models.RPRoute{Name: "cached-route", NoCache: false})
 
 			h.ServeHTTP(httptest.NewRecorder(), req)
-			Expect(store.setCalls).To(HaveLen(1))
+			Expect(setCalls).To(HaveLen(1))
 		})
 	})
 
@@ -671,7 +649,7 @@ var _ = Describe("Cache middleware", func() {
 				h.ServeHTTP(httptest.NewRecorder(), testutils.RequestWithRoute(http.MethodGet, "/foo", "r1"))
 
 				Expect(skipCount("r1", reason) - before).To(Equal(float64(1)))
-				Expect(store.setCalls).To(BeEmpty())
+				Expect(setCalls).To(BeEmpty())
 			},
 			Entry("status code outside 2xx/3xx", 1024, func(w http.ResponseWriter) {
 				w.WriteHeader(http.StatusInternalServerError)

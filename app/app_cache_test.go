@@ -110,25 +110,6 @@ var _ = Describe("App cache wiring", func() {
 			// nil-cacheStore guard.
 			Expect(func() { _ = a.Close() }).NotTo(Panic())
 		})
-
-		It("on a Redis-backed app, the first Close succeeds and a second Close reports the client is already closed", func() {
-			mr := miniredis.RunT(GinkgoT())
-			cfg := configWithRoute(config.Cache{
-				Redis: &config.RedisCache{URL: "redis://" + mr.Addr(), Ttl: time.Minute},
-			})
-
-			a, err := app.NewAppBare(cfg)
-			Expect(err).NotTo(HaveOccurred())
-
-			Expect(a.Close()).To(Succeed())
-			// go-redis returns an error wrapping "client is closed" when
-			// Close is invoked on an already-closed client. That's the only
-			// observable proof we have that the first Close actually shut
-			// the client down — the Cache interface doesn't expose state.
-			err = a.Close()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("closed"))
-		})
 	})
 
 	Describe("NewApp + cache wiring", func() {

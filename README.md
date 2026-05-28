@@ -276,6 +276,41 @@ The `cache_*` metrics are only emitted when a cache backend is configured.
 | `set_cookie` | The response set a `Set-Cookie` header (per-client). |
 | `vary` | The response carried a `Vary` header. |
 
+## Development
+
+Requires Go 1.26+. Tests use [Ginkgo v2](https://onsi.github.io/ginkgo/) + Gomega.
+
+```bash
+# Build
+go build ./...
+
+# Run the full test suite (randomized, race-enabled, parallel)
+ginkgo --randomize-all --randomize-suites --race -p ./...
+
+# Lint (config-driven; do not substitute bare `go vet`)
+golangci-lint run ./...
+
+# Format
+gofmt -w .
+```
+
+### Generating mocks
+
+Test doubles for interfaces are generated with [`go.uber.org/mock`](https://github.com/uber-go/mock). For example,
+the `caches.Cache` interface carries a `//go:generate mockgen` directive that produces `caches/mocks/mock_cache.go`.
+Install the generator once, then regenerate after changing any mocked interface:
+
+```bash
+# One-time: install the mockgen binary
+go install go.uber.org/mock/mockgen@latest
+
+# Regenerate every //go:generate directive in the module
+go generate ./...
+```
+
+Generated mocks are committed, so a plain `go test` / `ginkgo` run does not require `mockgen` to be installed — only
+regenerating them does.
+
 ## License
 
 See [LICENSE](./LICENSE).

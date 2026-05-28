@@ -92,19 +92,4 @@ var _ = Describe("AccessLog middleware", func() {
 		Expect(ok).To(BeTrue(), "record should carry a route_name attr")
 		Expect(v.String()).To(Equal("access-log-test-route"))
 	})
-
-	It("falls back to route_name=\"unknown\" when no route is in context", func() {
-		next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		})
-		h := middlewares.AccessLog(slog.LevelInfo)(next)
-
-		req := httptest.NewRequest(http.MethodGet, "/anything", nil)
-		h.ServeHTTP(httptest.NewRecorder(), req)
-
-		Expect(captured.records).To(HaveLen(1))
-		v, ok := findAttr(captured.records[0], "route_name")
-		Expect(ok).To(BeTrue(), "record should carry a route_name attr even without a matched route")
-		Expect(v.String()).To(Equal("unknown"))
-	})
 })

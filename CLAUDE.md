@@ -30,6 +30,10 @@ golangci-lint run ./...
 # Format
 gofmt -w .
 
+# Regenerate mocks (after changing an interface that carries a //go:generate mockgen directive)
+go install go.uber.org/mock/mockgen@latest   # one-time, if mockgen is not on PATH
+go generate ./...
+
 # Run the binary against the checked-in config.yml (serves HTTPS on 127.0.0.1:8443 with cert.crt/key.key)
 go run . serve -c ./config.yml
 ```
@@ -192,9 +196,16 @@ Releases are cut by pushing a `v*` tag, which triggers `.github/workflows/releas
 - Errors are plain `errors.New` / `fmt.Errorf` (with `%w` where wrapping is useful) — no error wrapping framework.
 - Per-package metrics go in a `metrics.go` file in that package, registered with `promauto` against the default
   registry. There is no central metrics module.
-- Proxy tests use a `fakeTransport` (implements `http.RoundTripper`) that captures the forwarded request and returns a
-  programmable response — prefer this over `httptest.Server` so assertions can inspect headers directly on
-  `transport.received`.
+- Test doubles are **generated mocks** (`go.uber.org/mock` / mockgen), not hand-written fakes. `//go:generate mockgen`
+  directives live on `caches.Cache` (`caches/cache.go` → `caches/mocks`) and `net/http.RoundTripper`
+  (`proxy/transport.go` → `proxy/mocks`); the generated files are committed, regenerate with `go generate ./...` after
+  changing a mocked interface. Keep expectations **loose** (`gomock.Any()`, `.AnyTimes()`, `DoAndReturn`) so specs stay
+  behavior-focused rather than pinning call order/counts:
+  - Pure stub (script return values): `caches/metrics_test.go` programs `MockCache.Get/Set/Len`.
+  - Stateful double (round-trip `Set`→`Get`, inspect what was stored): back the mock with an in-memory map inside
+    `DoAndReturn` and record touched keys in closure vars — see `middlewares/cache_test.go`.
+  - Capturing the forwarded request: `proxy/proxy_test.go` wires `MockRoundTripper.RoundTrip` with a `DoAndReturn` that
+    stashes the request for assertions, instead of an `httptest.Server`.
 - App-level tests should use `app.NewAppBare(cnf)` plus `SetMiddlewares` / `SetServerBuilder` to keep the unit under
   test small.
 - Shared test helpers live in the `testutils` package (`RequestWithRoute`, `MustYamlParseURL`, `AssetPath`). Reach for

@@ -15,12 +15,12 @@ var _ caches.Cache = (*caches.LRUExpirable)(nil)
 
 var _ = Describe("LRUExpirable", func() {
 	var (
-		cache    *caches.LRUExpirable
-		evicted  map[string]*models.CacheData
-		evictMu  sync.Mutex
-		onEvict  caches.EvictionCallback
-		sampleA  *models.CacheData
-		sampleB  *models.CacheData
+		cache   *caches.LRUExpirable
+		evicted map[string]*models.CacheData
+		evictMu sync.Mutex
+		onEvict caches.EvictionCallback
+		sampleA *models.CacheData
+		sampleB *models.CacheData
 	)
 
 	BeforeEach(func() {

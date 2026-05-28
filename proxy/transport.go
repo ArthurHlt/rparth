@@ -7,6 +7,8 @@ import (
 	"github.com/ArthurHlt/rparth/config"
 )
 
+//go:generate mockgen -destination=mocks/mock_transport.go -package=mocks net/http RoundTripper
+
 func DefaultProxyTransport(transConfig config.Transport) http.RoundTripper {
 	return &http.Transport{
 		Proxy: http.ProxyFromEnvironment,

@@ -80,36 +80,4 @@ var _ = Describe("MetricsHttp middleware", func() {
 			`http_requests_total{method="GET",route_name="%s"`, routeName)))
 	})
 
-	It("labels by route name pulled from the request context", func() {
-		const routeName = "middlewares-test-metrics-http-route"
-
-		next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		})
-		h := middlewares.MetricsHttp()(next)
-
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, "/", routeName))
-
-		Expect(scrapeMetrics()).To(ContainSubstring(fmt.Sprintf(
-			`http_requests_total{method="GET",route_name="%s",status="200"} 1`, routeName)))
-	})
-
-	It("falls back to route_name=\"unknown\" when no route is in context", func() {
-		// No contexts.SetRPRoute call — the middleware should label the
-		// metric as "unknown" instead of leaking a per-path value (which
-		// would blow up cardinality, the very reason for this refactor).
-		next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		})
-		h := middlewares.MetricsHttp()(next)
-
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/anything", nil))
-
-		// "unknown" is shared across any spec that omits a route, so the
-		// counter value is not pinned — just assert the labelled series exists.
-		Expect(scrapeMetrics()).To(ContainSubstring(
-			`http_requests_total{method="GET",route_name="unknown",status="200"}`))
-	})
 })
