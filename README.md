@@ -1,6 +1,6 @@
 # rparth
 
-A small reverse proxy shipped as a single Go binary for an interview. It does prefix/host based
+A small http reverse proxy shipped as a single Go binary for an interview. It does prefix/host based
 routing, response streaming, request forwarding headers (RFC 7239), an optional response cache (in-process LRU or
 shared Redis), Prometheus metrics, and structured access logs.
 
@@ -10,13 +10,16 @@ Websocket are not supported in this reverse proxy to simplify the implementation
 > For the interviewer
 >
 > Commit titles follow the Conventional Commits specification, while the commit bodies are intentionally written as a
-> development log.
+> development log (with no AI involved).
 >
 > The goal is to provide visibility into my workflow, technical reasoning, and decision-making process throughout the
 > project.
 >
 > This is not something I would typically do in a real production project, but I believe it makes the project's
 > evolution and technical choices easier to follow for the reader.
+>
+> You can find a generated [tldr-devlog.md](/tldr-devlog.md) generated from the commit messages.
+> This is useful to help you scan and jump to the right commit to see my devlog.
 
 
 > [!NOTE]
@@ -37,6 +40,35 @@ Websocket are not supported in this reverse proxy to simplify the implementation
 >
 > In summary, I do not primarily use AI to save time, but rather to reduce repetitive/bothering work and help improve
 > software quality or at least my PR quality in real life.
+
+## Table of contents
+
+- [Features](#features)
+- [Install](#install)
+- [Usage](#usage)
+    - [Running with Docker](#running-with-docker)
+- [Configuration](#configuration)
+    - [Top level](#top-level)
+    - [`<route>`](#route)
+    - [`<server>`](#server)
+    - [`<tls>`](#tls)
+    - [`<log>`](#log)
+    - [`<cache>`](#cache)
+    - [`<lru>`](#lru)
+    - [`<redis>`](#redis)
+    - [`<transport>`](#transport)
+- [Caching behavior](#caching-behavior)
+- [Observability](#observability)
+    - [The `reason` label](#the-reason-label)
+- [Design decisions & trade-offs](#design-decisions--trade-offs)
+    - [Proxying & streaming](#proxying--streaming)
+    - [Caching](#caching)
+    - [Observability](#observability-1)
+    - [Operations](#operations)
+    - [Tooling & testing](#tooling--testing)
+- [Development](#development)
+    - [Generating mocks](#generating-mocks)
+- [License](#license)
 
 ## Features
 
@@ -308,6 +340,74 @@ The `cache_*` metrics are only emitted when a cache backend is configured.
 | `status_code`        | The response status was `< 200` or `>= 400`.                                         |
 | `set_cookie`         | The response set a `Set-Cookie` header (per-client).                                 |
 | `vary`               | The response carried a `Vary` header.                                                |
+
+## Design decisions & trade-offs
+
+> [!NOTE]
+> I would not put this in a real project, this is for the interviewer to see why I've made certain
+> choices.
+>
+> You can see in devlog those decision being made in "live"
+
+The notable choices made during the project and the reasoning behind them.
+
+### Proxying & streaming
+
+- **HTTP/2 is not forced upstream.** It would reduce the number of TCP connections, but it
+  complicates the streaming response path this proxy relies on. For this exercise the complexity
+  isn't worth the benefit; in a real deployment I'd enable it to serve more requests for the same
+  hardware.
+- **WebSocket is not supported.** Hop-by-hop headers are sanitized before reaching the backend (as
+  they must be) which will cancel websocket upgrade. handkshake is over http but protocol itself is not http.
+- **Responses are streamed, not buffered.** Upstream compression is disabled so the body can be
+  forwarded straight through, and each write is flushed (via `http.Flusher` when available) so SSE
+  and other long-running requests aren't held in an internal buffer and don't appear to stall.
+
+### Caching
+
+- **LRU with expiration + per-item size cap.** The LRU bounds the entry count and the per-entry
+  size limit (default 1 MiB) bounds per-entry memory, so worst-case cache memory stays predictable
+  and we avoid unbounded growth.
+- **The cache key includes `Authorization`/`Cookie`.** This isolates cached responses per user so
+  an authenticated user can never read another user's cached response. The key is hashed with
+  xxhash for speed and low collision rate.
+- **Per-route `no_cache` flag.** Caching used to be effectively forced; this hands the
+  cacheability decision to the operator on a per-route basis.
+- **Redis as an optional shared backend.** In a multi-instance deployment, a shared cache avoids
+  every instance independently rebuilding and storing the same entries. The Redis client is closed
+  cleanly on shutdown; it is intentionally **not** wired through dependency injection because it's
+  only needed in one place and DI would add needless complexity.
+
+### Observability
+
+- **Middleware-based observability.** Access logs (`go-chi/httplog`) and Prometheus metrics are
+  middlewares in front of the proxy. The `/_metrics` endpoint is itself a middleware that
+  short-circuits the chain, which avoids pulling in a router just for one endpoint.
+- **Route is carried on the request context.** A dedicated middleware matches the route and puts
+  it on the context; everything downstream (access log `route_name`, metric labels, cache key)
+  reads it from there instead of re-matching. Using the route *name* as the label (rather than the
+  raw path) keeps metric cardinality — and therefore memory — bounded.
+- **Upstream errors get their own metric and a `reason`.** Separating proxy-level request/error
+  metrics from the full-chain metrics lets you tell a slow or failing backend apart from a slow
+  proxy, and classifying failures by reason (timeout, DNS, connection refused, TLS, …) makes the
+  cause visible. Upstream failures map to `502`.
+
+### Operations
+
+- **HTTPS is supported and expected.** Running behind TLS is the production default, so it's a
+  first-class config option rather than an afterthought.
+- **Graceful shutdown with a force escape hatch.** On `SIGINT`/`SIGTERM` the server drains
+  in-flight requests; a **second** signal forces an immediate stop (mainly a development
+  convenience when you don't want to wait).
+
+### Tooling & testing
+
+- **Kong for the CLI** — flags via struct tags, no hand-rolled argument parsing.
+- **`goccy/go-yaml` for config** — the older `go-yaml/yaml` is archived; this library also allows a
+  custom unmarshaler for `url.URL`, and config is validated at decode time.
+- **Ginkgo + Gomega, with generated mocks.** BDD specs read well and stay behavior-focused;
+  interface doubles are generated with `mockgen` (rather than hand-written fakes) and kept with
+  loose expectations.
 
 ## Development
 

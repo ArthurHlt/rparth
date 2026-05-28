@@ -4,3 +4,6 @@
 /*.crt
 /*.key
 /dist/
+/*.sh
+/*.cast
+/*.puml
