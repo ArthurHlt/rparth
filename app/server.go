@@ -16,6 +16,8 @@ func (a *App) RunServer(stopCtx, forceCtx context.Context) error {
 	mds := append([]middlewares.Middleware{proxyHandler.MarkRPRouteRequest()}, a.middlewares...)
 	handler := middlewares.Chain(mds...)(proxyHandler)
 
+	slog.Info("Route loaded", "total_routes", len(a.cnf.Routes))
+
 	servConf := a.cnf.Server
 	server, ln, err := a.httpServerBuilder(servConf.ListenAddr)
 	if err != nil {

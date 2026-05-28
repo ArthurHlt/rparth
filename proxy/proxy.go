@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -57,19 +56,35 @@ func NewProxy(transport http.RoundTripper, rpRoutes models.RPRoutes) *Proxy {
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	slog.Debug("start request received", "method", req.Method, "url", req.URL.String())
-	resp, err := p.roundTrip(req)
+	route := contexts.GetRPRoute(req)
+	if route == nil {
+		http.Error(w, "no route found", http.StatusNotFound)
+		return
+	}
+
+	start := time.Now()
+	resp, err := p.roundTrip(route, req)
 	if err != nil {
-		// No-route is a configuration/programmer issue (500); any other
-		// error from roundTrip is an upstream failure (502 Bad Gateway).
+		httpProxyErrorsTotal.WithLabelValues(route.Name, req.Method, string(proxyErrorReason(err))).Inc()
+		httpProxyRequestDuration.WithLabelValues(route.Name, req.Method, "502").
+			Observe(time.Since(start).Seconds())
 		status := http.StatusBadGateway
-		if errors.Is(err, models.ErrNoRoute) {
-			status = http.StatusInternalServerError
-		}
-		slog.Error("error proxying request", "err", err, "url", req.URL.String(), "method", req.Method)
+		slog.Error(
+			"error proxying request",
+			"err", err,
+			"url", req.URL.String(),
+			"method", req.Method,
+			"route", route,
+		)
 		http.Error(w, err.Error(), status)
 		return
 	}
 	defer resp.Body.Close()
+
+	httpProxyRequestsTotal.WithLabelValues(route.Name, req.Method, strconv.Itoa(resp.StatusCode)).Inc()
+	httpProxyRequestDuration.WithLabelValues(route.Name, req.Method, strconv.Itoa(resp.StatusCode)).
+		Observe(time.Since(start).Seconds())
+
 	for k, v := range resp.Header {
 		w.Header()[k] = v
 	}
@@ -82,11 +97,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	slog.Debug("request finished", "url", req.URL.String(), "method", req.Method)
 }
 
-func (p *Proxy) roundTrip(req *http.Request) (*http.Response, error) {
-	route := contexts.GetRPRoute(req)
-	if route == nil {
-		return nil, models.ErrNoRoute
-	}
+func (p *Proxy) roundTrip(route *models.RPRoute, req *http.Request) (*http.Response, error) {
 	slog.Debug(
 		"route found",
 		"route", route,
@@ -122,20 +133,8 @@ func (p *Proxy) roundTrip(req *http.Request) (*http.Response, error) {
 		"method", reqProxy.Method,
 		"route", route,
 	)
-
-	start := time.Now()
 	resp, err := p.transport.RoundTrip(reqProxy)
 	if err != nil {
-		httpProxyErrorsTotal.WithLabelValues(route.Name, reqProxy.Method, string(proxyErrorReason(err))).Inc()
-		httpProxyRequestDuration.WithLabelValues(route.Name, reqProxy.Method, "502").
-			Observe(time.Since(start).Seconds())
-		slog.Error(
-			"error proxying request",
-			"err", err,
-			"url", reqProxy.URL.String(),
-			"method", reqProxy.Method,
-			"route", route,
-		)
 		return nil, err
 	}
 	resp.Header = p.sanitizeHopByHopHeaders(resp.Header)
@@ -144,9 +143,7 @@ func (p *Proxy) roundTrip(req *http.Request) (*http.Response, error) {
 		"method", reqProxy.Method,
 		"route", route,
 	)
-	httpProxyRequestsTotal.WithLabelValues(route.Name, reqProxy.Method, strconv.Itoa(resp.StatusCode)).Inc()
-	httpProxyRequestDuration.WithLabelValues(route.Name, reqProxy.Method, strconv.Itoa(resp.StatusCode)).
-		Observe(time.Since(start).Seconds())
+
 	return resp, nil
 }
 

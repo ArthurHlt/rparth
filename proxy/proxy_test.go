@@ -135,11 +135,11 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 	})
 
 	Describe("error paths", func() {
-		It("returns 500 when no route matches", func() {
+		It("returns 404 when no route matches", func() {
 			req := newRequest("unknown.example.com:80", "/", nil)
 			serve(p, w, req)
 
-			Expect(w.Code).To(Equal(http.StatusInternalServerError))
+			Expect(w.Code).To(Equal(http.StatusNotFound))
 			Expect(w.Body.String()).To(ContainSubstring("no route found"))
 			Expect(transport.received).To(BeNil())
 		})
@@ -285,14 +285,6 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 
 			Expect(transport.received.URL.Host).To(Equal("web-backend:7000"))
 			Expect(transport.received.URL.Path).To(Equal("/dashboard"))
-		})
-
-		It("does not invoke the transport when no route matches", func() {
-			req := newRequest("nowhere.example.com:80", "/", nil)
-			serve(p, w, req)
-
-			Expect(transport.received).To(BeNil())
-			Expect(w.Code).To(Equal(http.StatusInternalServerError))
 		})
 	})
 
@@ -517,18 +509,6 @@ var _ = Describe("Proxy.ServeHTTP route-from-context contract", func() {
 		}
 		p = proxy.NewProxy(transport, models.RPRoutes{apiRoute})
 		w = httptest.NewRecorder()
-	})
-
-	It("returns 500 when called directly with no route in context", func() {
-		// Without MarkRPRouteRequest in front, no route is set on the
-		// context, so ServeHTTP must surface ErrNoRoute as a 500 even when
-		// the request would otherwise match a configured route.
-		req := newRequest("api.example.com:80", "/", nil)
-		p.ServeHTTP(w, req)
-
-		Expect(w.Code).To(Equal(http.StatusInternalServerError))
-		Expect(w.Body.String()).To(ContainSubstring("no route found"))
-		Expect(transport.received).To(BeNil())
 	})
 
 	It("dispatches using the route in context, not by re-matching the request", func() {

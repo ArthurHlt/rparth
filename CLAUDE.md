@@ -64,15 +64,19 @@ The request lifecycle, top-down:
 
 ### Proxy package
 
-`proxy.Proxy` is constructed with a `RoundTripper` + `RPRoutes` and implements `http.Handler`. `roundTrip` reads the
-matched route from the request context (set by `MarkRPRouteRequest`, *not* re-matched here), clones the request,
-rewrites `URL.Host`/`URL.Scheme` *and* `req.Host` (the field) to the route's `Target` — both are required, since
+`proxy.Proxy` is constructed with a `RoundTripper` + `RPRoutes` and implements `http.Handler`. `ServeHTTP` reads the
+matched route from the request context (set by `MarkRPRouteRequest`, *not* re-matched here); if there is no route it
+returns `404 Not Found` without touching the transport. Otherwise it times the call, invokes `roundTrip(route, req)`,
+and records the proxy-level metrics (`http_proxy_requests_total` + duration on success, `http_proxy_errors_total` +
+duration labelled `502` on failure). `roundTrip` takes the route as an argument, clones the request, rewrites
+`URL.Host`/`URL.Scheme` *and* `req.Host` (the field) to the route's `Target` — both are required, since
 `http.Transport` derives the wire-level `Host:` header from `req.Host`, not from `req.Header["Host"]`. It then
 sanitizes hop-by-hop headers on the request, injects per-route headers, then injects proxy-set forwarding headers
-(see below), forwards via the transport, and sanitizes hop-by-hop headers on the response. If `io.Copy` from the
-upstream body fails mid-stream, `ServeHTTP` only logs and returns — it does **not** call `http.Error`, because the
-response has already been committed. Errors from `roundTrip` map to `502 Bad Gateway`, except `models.ErrNoRoute`
-which is a `500` (it means routing failed *after* `MarkRPRouteRequest` ran — a config/programmer bug).
+(see below), forwards via the transport, and sanitizes hop-by-hop headers on the response. Any error from `roundTrip`
+is an upstream failure and maps to `502 Bad Gateway`. If `io.Copy` from the upstream body fails mid-stream,
+`ServeHTTP` only logs and returns — it does **not** call `http.Error`, because the response has already been
+committed. (`models.ErrNoRoute` is still returned by `RPRoutes.FindRoute`, but `MarkRPRouteRequest` discards it and
+nothing maps it to a status anymore.)
 
 `DefaultProxyTransport` is a tuned `http.Transport` — bigger idle pool, shorter idle timeout, **compression disabled**
 so the response body can be streamed straight to the client.
@@ -137,11 +141,16 @@ The HTTP-level cache logic is in `middlewares/cache.go`:
 
 - **Access log**: `httplog/v3` with OTEL schema, panics recovered, `route_name` added as an extra attribute.
 - **Prometheus**: scrape endpoint on `/_metrics` (served by the `Prometheus` middleware short-circuiting the chain).
-  Four metric families, all on the default registry via `promauto`:
-  - `http_requests_total{route_name,method,status}` / `http_request_duration_seconds` — middleware-level (sees the
-    full chain including cache hits).
-  - `http_proxy_requests_total{...}` / `http_proxy_request_duration_seconds` — proxy-level (only upstream calls).
-  - `cache_hits_total` / `cache_misses_total` / `cache_lookup_latency_seconds` / `cache_size`.
+  All on the default registry via `promauto` (see the README table for the full list):
+  - `http_requests_total{route_name,method,status}` / `http_request_duration_seconds` / `http_requests_in_flight` —
+    middleware-level (sees the full chain including cache hits).
+  - `http_proxy_requests_total{...}` / `http_proxy_request_duration_seconds` (success) and
+    `http_proxy_errors_total{route_name,method,reason}` (transport failures) — proxy-level, recorded in
+    `Proxy.ServeHTTP`. The `reason` is from `proxyErrorReason` (timeout/canceled/dns/connection_refused/tls/...).
+  - `cache_hits_total` / `cache_misses_total` / `cache_lookup_latency_seconds` / `cache_skip_total{route_name,reason}`,
+    plus `cache_size` — a scrape-time `GaugeFunc` reading the store's `Len()`, registered per `CacheMetrics` and
+    unregistered on `Close()` (so don't construct two live `CacheMetrics` on the default registry at once).
+  - `rparth_build_info{version,commit,date}` set to `1` in `main`.
 
 ## Release & container image
 
