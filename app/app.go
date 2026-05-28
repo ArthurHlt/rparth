@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -31,25 +32,28 @@ type App struct {
 	cnf               *config.Config
 	httpServerBuilder HttpServerBuilder
 	middlewares       []middlewares.Middleware
+	cacheStore        caches.Cache
 }
 
-func NewApp(cnf *config.Config) *App {
-	app := NewAppBare(cnf)
-	app.middlewares = []middlewares.Middleware{
-		middlewares.AccessLog(cnf.Log.Level),
-		middlewares.Prometheus(),
-		middlewares.MetricsHttp(),
-		middlewares.Cache(app.makeCacheHandler()),
+func NewApp(cnf *config.Config) (*App, error) {
+	app, err := NewAppBare(cnf)
+	if err != nil {
+		return nil, err
 	}
-	return app
+	app.middlewares = app.makeMiddlewares()
+	return app, nil
 }
 
 // NewAppBare returns an App with no middlewares.
 // useful for testing.
-func NewAppBare(cnf *config.Config) *App {
+func NewAppBare(cnf *config.Config) (*App, error) {
 	app := &App{cnf: cnf, httpServerBuilder: defaultHttpServerBuilder}
 	app.preInit()
-	return app
+	err := app.loadCacheStore()
+	if err != nil {
+		return nil, err
+	}
+	return app, nil
 }
 
 func (a *App) SetMiddlewares(middlewares []middlewares.Middleware) {
@@ -77,15 +81,59 @@ func (a *App) preInit() {
 	slog.SetDefault(slog.New(handler))
 }
 
-func (a *App) makeCacheStore() caches.Cache {
-	return caches.NewLRUExpirable(
-		100,
-		nil,
-		10*time.Minute,
-	)
+func (a *App) makeMiddlewares() []middlewares.Middleware {
+	mdws := []middlewares.Middleware{
+		middlewares.AccessLog(a.cnf.Log.Level),
+		middlewares.Prometheus(),
+		middlewares.MetricsHttp(),
+	}
+	cacheHandler := a.makeCacheHandler()
+	if cacheHandler != nil {
+		mdws = append(mdws, middlewares.Cache(cacheHandler))
+	} else {
+		slog.Warn("cache is disabled")
+	}
+	return mdws
+}
+
+func (a *App) loadCacheStore() error {
+	if a.cnf.Cache.Lru == nil && a.cnf.Cache.Redis == nil {
+		return nil
+	}
+	var cacheStore caches.Cache
+	switch {
+	case a.cnf.Cache.Lru != nil:
+		lruCacheConfig := a.cnf.Cache.Lru
+		cacheStore = caches.NewLRUExpirable(
+			int(lruCacheConfig.Size),
+			nil,
+			lruCacheConfig.Ttl,
+		)
+		slog.Info("cache configured", "type", "lru", "size", lruCacheConfig.Size, "ttl", lruCacheConfig.Ttl)
+	case a.cnf.Cache.Redis != nil:
+		var err error
+		redisConfig := a.cnf.Cache.Redis
+		cacheStore, err = caches.NewRedisCache(redisConfig.URL, redisConfig.Ttl)
+		if err != nil {
+			return fmt.Errorf("init redis cache: %w", err)
+		}
+		slog.Info("cache configured", "type", "redis", "ttl", redisConfig.Ttl)
+	}
+	a.cacheStore = caches.NewCacheMetrics(cacheStore)
+	return nil
 }
 
 func (a *App) makeCacheHandler() *middlewares.CacheHandler {
-	// 1 MiB max cached body size
-	return middlewares.NewCacheHandler(a.makeCacheStore(), 1024*1024)
+	if a.cacheStore == nil {
+		return nil
+	}
+	slog.Info("cache enabled", "max_size_item", a.cnf.Cache.MaxSizeItem)
+	return middlewares.NewCacheHandler(a.cacheStore, int(a.cnf.Cache.MaxSizeItem))
+}
+
+func (a *App) Close() error {
+	if a.cacheStore == nil {
+		return nil
+	}
+	return a.cacheStore.Close()
 }

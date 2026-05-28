@@ -102,6 +102,19 @@ routes:
 			Expect(route.Timeout).To(Equal(uint(30)))
 			Expect(route.StripPrefix).NotTo(BeNil())
 			Expect(*route.StripPrefix).To(BeTrue())
+			Expect(route.NoCache).To(BeFalse())
+		})
+
+		It("decodes no_cache: true on a route", func() {
+			path := writeConfigFile(`
+routes:
+  - name: uncached
+    target: http://backend:8080
+    no_cache: true
+`)
+			cnf, err := config.ReadConfig(path)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cnf.Routes[0].NoCache).To(BeTrue())
 		})
 	})
 

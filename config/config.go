@@ -11,9 +11,11 @@ import (
 )
 
 type Config struct {
-	Routes models.RPRoutes `yaml:"routes"`
-	Server *Server         `yaml:"server"`
-	Log    Log             `yaml:"log"`
+	Routes    models.RPRoutes `yaml:"routes"`
+	Server    *Server         `yaml:"server"`
+	Log       Log             `yaml:"log"`
+	Cache     Cache           `yaml:"cache"`
+	Transport Transport       `yaml:"transport"`
 }
 
 func (c *Config) UnmarshalYAML(data []byte) error {

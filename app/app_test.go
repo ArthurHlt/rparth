@@ -40,7 +40,9 @@ var _ = Describe("NewApp", func() {
 	}
 
 	It("returns a non-nil app for a valid config", func() {
-		Expect(app.NewApp(baseConfig())).NotTo(BeNil())
+		a, err := app.NewApp(baseConfig())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(a).NotTo(BeNil())
 	})
 
 	// tint's concrete handler type is unexported, so we can't assert against it
@@ -51,7 +53,8 @@ var _ = Describe("NewApp", func() {
 		cnf := baseConfig()
 		cnf.Log = config.Log{Level: slog.LevelInfo}
 
-		app.NewApp(cnf)
+		_, err := app.NewApp(cnf)
+		Expect(err).NotTo(HaveOccurred())
 
 		_, isJSON := slog.Default().Handler().(*slog.JSONHandler)
 		Expect(isJSON).To(BeFalse())
@@ -61,7 +64,8 @@ var _ = Describe("NewApp", func() {
 		cnf := baseConfig()
 		cnf.Log = config.Log{InJson: true, Level: slog.LevelInfo}
 
-		app.NewApp(cnf)
+		_, err := app.NewApp(cnf)
+		Expect(err).NotTo(HaveOccurred())
 
 		_, ok := slog.Default().Handler().(*slog.JSONHandler)
 		Expect(ok).To(BeTrue(), "expected *slog.JSONHandler, got %T", slog.Default().Handler())
@@ -72,7 +76,8 @@ var _ = Describe("NewApp", func() {
 			cnf := baseConfig()
 			cnf.Log = config.Log{Level: level}
 
-			app.NewApp(cnf)
+			_, err := app.NewApp(cnf)
+			Expect(err).NotTo(HaveOccurred())
 
 			ctx := context.Background()
 			Expect(slog.Default().Enabled(ctx, level)).To(BeTrue())
@@ -90,7 +95,8 @@ var _ = Describe("NewApp", func() {
 		cnf := baseConfig()
 		cnf.Log = config.Log{InJson: true, Level: slog.LevelError}
 
-		app.NewApp(cnf)
+		_, err := app.NewApp(cnf)
+		Expect(err).NotTo(HaveOccurred())
 
 		ctx := context.Background()
 		Expect(slog.Default().Enabled(ctx, slog.LevelError)).To(BeTrue())
@@ -100,10 +106,11 @@ var _ = Describe("NewApp", func() {
 
 var _ = Describe("App.SetServerBuilder", func() {
 	It("panics when given a nil builder", func() {
-		a := app.NewApp(&config.Config{
+		a, err := app.NewApp(&config.Config{
 			Routes: models.RPRoutes{{Name: "api", Prefix: "/", Target: testutils.MustYamlParseURL("http://backend:8080")}},
 			Server: &config.Server{ListenAddr: ":0"},
 		})
+		Expect(err).NotTo(HaveOccurred())
 
 		Expect(func() { a.SetServerBuilder(nil) }).To(PanicWith("builder cannot be nil"))
 	})

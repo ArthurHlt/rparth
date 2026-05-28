@@ -40,7 +40,8 @@ var _ = Describe("App.RunServer", func() {
 			Routes: models.RPRoutes{{Name: "api", Prefix: "/", Target: testutils.MustYamlParseURL("http://backend:8080")}},
 			Server: &config.Server{ListenAddr: listener.Addr().String()},
 		}
-		a := app.NewAppBare(cnf)
+		a, err := app.NewAppBare(cnf)
+		Expect(err).NotTo(HaveOccurred())
 
 		Expect(a.RunServer(context.Background(), context.Background())).To(HaveOccurred())
 	})
@@ -50,7 +51,8 @@ var _ = Describe("App.RunServer", func() {
 			Routes: models.RPRoutes{{Name: "api", Prefix: "/", Target: testutils.MustYamlParseURL("http://backend:8080")}},
 			Server: &config.Server{ListenAddr: "not-a-valid-addr"},
 		}
-		a := app.NewAppBare(cnf)
+		a, err := app.NewAppBare(cnf)
+		Expect(err).NotTo(HaveOccurred())
 
 		Expect(a.RunServer(context.Background(), context.Background())).To(HaveOccurred())
 	})
@@ -60,7 +62,8 @@ var _ = Describe("App.RunServer", func() {
 			Routes: models.RPRoutes{{Name: "api", Prefix: "/", Target: testutils.MustYamlParseURL("http://backend:8080")}},
 			Server: &config.Server{ListenAddr: ":0"},
 		}
-		a := app.NewAppBare(cnf)
+		a, err := app.NewAppBare(cnf)
+		Expect(err).NotTo(HaveOccurred())
 
 		boom := &net.AddrError{Err: "builder said no", Addr: "x"}
 		a.SetServerBuilder(func(_ string) (*http.Server, net.Listener, error) {
@@ -83,7 +86,8 @@ var _ = Describe("App.RunServer", func() {
 			Routes: models.RPRoutes{{Name: "api", Prefix: "/", Target: testutils.MustYamlParseURL(backend.URL)}},
 			Server: &config.Server{ListenAddr: frontend.Listener.Addr().String()},
 		}
-		a := app.NewAppBare(cnf)
+		a, err := app.NewAppBare(cnf)
+		Expect(err).NotTo(HaveOccurred())
 		a.SetServerBuilder(builder)
 
 		errCh, stopCancel, forceCancel := runInBackground(a)
@@ -119,7 +123,8 @@ var _ = Describe("App.RunServer", func() {
 			Routes: models.RPRoutes{{Name: "api", Prefix: "/", Target: testutils.MustYamlParseURL(backend.URL)}},
 			Server: &config.Server{ListenAddr: frontend.Listener.Addr().String()},
 		}
-		a := app.NewAppBare(cnf)
+		a, err := app.NewAppBare(cnf)
+		Expect(err).NotTo(HaveOccurred())
 		a.SetServerBuilder(builder)
 
 		errCh, stopCancel, forceCancel := runInBackground(a)
@@ -168,7 +173,8 @@ var _ = Describe("App.RunServer", func() {
 					},
 				},
 			}
-			a := app.NewAppBare(cnf)
+			a, err := app.NewAppBare(cnf)
+			Expect(err).NotTo(HaveOccurred())
 			a.SetServerBuilder(builder)
 
 			errCh, stopCancel, forceCancel := runInBackground(a)
@@ -207,7 +213,8 @@ var _ = Describe("App.RunServer", func() {
 					Tls:        &config.ServerTLS{CertFile: "/nonexistent/cert.pem", KeyFile: "/nonexistent/key.pem"},
 				},
 			}
-			a := app.NewAppBare(cnf)
+			a, err := app.NewAppBare(cnf)
+			Expect(err).NotTo(HaveOccurred())
 			a.SetServerBuilder(builder)
 
 			Expect(a.RunServer(context.Background(), context.Background())).To(HaveOccurred())

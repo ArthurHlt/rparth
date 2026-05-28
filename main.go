@@ -28,7 +28,11 @@ func (r *ServeCmd) Run() error {
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
-	appRun := app.NewApp(cnf)
+	appRun, err := app.NewApp(cnf)
+	if err != nil {
+		return fmt.Errorf("init app: %w", err)
+	}
+	defer appRun.Close() // nolint: errcheck
 
 	// listen for signals SIGINT and SIGTERM
 	// in fact SIGINT is for getting ctrl+c when developing

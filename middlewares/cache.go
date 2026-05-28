@@ -2,6 +2,7 @@ package middlewares
 
 import (
 	"bytes"
+	"fmt"
 	"maps"
 	"net/http"
 	"strings"
@@ -19,20 +20,23 @@ func Cache(handler *CacheHandler) Middleware {
 }
 
 type cacheResponseWriter struct {
-	w           http.ResponseWriter
-	cacheData   *models.CacheData
-	buf         *bytes.Buffer
-	maxBodySize int
-	shouldCache bool
+	w             http.ResponseWriter
+	cacheData     *models.CacheData
+	buf           *bytes.Buffer
+	maxBodySize   int
+	shouldCache   bool
+	key           string
+	headerWritten bool
 }
 
-func newCacheResponseWriter(w http.ResponseWriter, maxBodySize int) *cacheResponseWriter {
+func newCacheResponseWriter(key string, w http.ResponseWriter, maxBodySize int) *cacheResponseWriter {
 	return &cacheResponseWriter{
 		w:           w,
 		cacheData:   &models.CacheData{Status: http.StatusOK},
 		buf:         &bytes.Buffer{},
 		maxBodySize: maxBodySize,
 		shouldCache: true,
+		key:         key,
 	}
 }
 
@@ -69,6 +73,8 @@ func (c *cacheResponseWriter) allowCachingFromHeaders(h http.Header) bool {
 }
 
 func (c *cacheResponseWriter) WriteHeader(statusCode int) {
+	c.headerWritten = true
+	c.injectCacheHttpHeader()
 	c.cacheData.Status = statusCode
 	if statusCode >= 400 || statusCode < 200 {
 		c.shouldCache = false
@@ -77,6 +83,10 @@ func (c *cacheResponseWriter) WriteHeader(statusCode int) {
 		c.shouldCache = c.allowCachingFromHeaders(c.w.Header())
 	}
 	c.w.WriteHeader(statusCode)
+}
+
+func (c *cacheResponseWriter) injectCacheHttpHeader() {
+	c.w.Header().Set("ETag", c.key)
 }
 
 func (c *cacheResponseWriter) Flush() {
@@ -90,7 +100,9 @@ func (c *cacheResponseWriter) finalize() {
 	if !c.shouldCache {
 		return
 	}
-
+	if !c.headerWritten {
+		c.injectCacheHttpHeader()
+	}
 	c.cacheData.Body = c.buf.Bytes()
 	c.cacheData.Headers = c.Header().Clone()
 }
@@ -125,10 +137,14 @@ func (c *CacheHandler) makeHash(r *http.Request) string {
 	if cookie != "" {
 		h.WriteString(cookie)
 	}
-	return string(h.Sum(nil))
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 func (c *CacheHandler) allowCaching(r *http.Request) bool {
+	route := contexts.GetRPRoute(r)
+	if route != nil && route.NoCache {
+		return false
+	}
 	if r.Method != http.MethodGet {
 		return false
 	}
@@ -151,6 +167,18 @@ func hasCacheControl(h http.Header, directives ...string) bool {
 	return false
 }
 
+func (c *CacheHandler) serveFromCache(key string, item *models.CacheData, w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("If-None-Match") == key {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	newHeaders := http.Header(item.Headers).Clone()
+	newHeaders.Set("X-Cache", "HIT")
+	maps.Copy(w.Header(), newHeaders)
+	w.WriteHeader(item.Status)
+	w.Write(item.Body)
+}
+
 func (c *CacheHandler) serveMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !c.allowCaching(r) {
@@ -160,13 +188,10 @@ func (c *CacheHandler) serveMiddleware(next http.Handler) http.Handler {
 		key := c.makeHash(r)
 		ca, ok := c.store.Get(key)
 		if ok {
-			maps.Copy(w.Header(), http.Header(ca.Headers).Clone())
-			w.Header().Set("X-Cache", "HIT")
-			w.WriteHeader(ca.Status)
-			w.Write(ca.Body)
+			c.serveFromCache(key, ca, w, r)
 			return
 		}
-		crw := newCacheResponseWriter(w, c.maxBodySize)
+		crw := newCacheResponseWriter(key, w, c.maxBodySize)
 		next.ServeHTTP(crw, r)
 		crw.finalize()
 		if !crw.shouldCache {

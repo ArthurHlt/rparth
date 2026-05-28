@@ -14,16 +14,22 @@ type LRUExpirable struct {
 }
 
 func NewLRUExpirable(size int, onEvict EvictionCallback, ttl time.Duration) *LRUExpirable {
-	var evictCallback expirable.EvictCallback[string, *models.CacheData]
+	var cb expirable.EvictCallback[string, *models.CacheData]
 	if onEvict != nil {
-		evictCallback = expirable.EvictCallback[string, *models.CacheData](onEvict)
+		cb = func(key string, value *models.CacheData) {
+			onEvict(key, value)
+		}
 	}
 	lru := expirable.NewLRU[string, *models.CacheData](
 		size,
-		evictCallback,
+		cb,
 		ttl,
 	)
 	return &LRUExpirable{lruCache: lru}
+}
+
+func (l *LRUExpirable) Close() error {
+	return nil
 }
 
 func (l *LRUExpirable) Get(key string) (*models.CacheData, bool) {
@@ -32,6 +38,10 @@ func (l *LRUExpirable) Get(key string) (*models.CacheData, bool) {
 
 func (l *LRUExpirable) Set(key string, data *models.CacheData) {
 	l.lruCache.Add(key, data)
+}
+
+func (l *LRUExpirable) Contains(key string) bool {
+	return l.lruCache.Contains(key)
 }
 
 func (l *LRUExpirable) Delete(key string) {

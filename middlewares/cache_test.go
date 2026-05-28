@@ -22,6 +22,10 @@ type fakeCache struct {
 	setCalls []string
 }
 
+func (f *fakeCache) Close() error {
+	return nil
+}
+
 func newFakeCache() *fakeCache {
 	return &fakeCache{data: map[string]*models.CacheData{}}
 }
@@ -45,6 +49,13 @@ func (f *fakeCache) Delete(key string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.data, key)
+}
+
+func (f *fakeCache) Contains(key string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.data[key]
+	return ok
 }
 
 func (f *fakeCache) onlyEntry() *models.CacheData {
@@ -513,6 +524,99 @@ var _ = Describe("Cache middleware", func() {
 			Expect(func() {
 				h.ServeHTTP(httptest.NewRecorder(), testutils.RequestWithRoute(http.MethodGet, "/no-flush", "r1"))
 			}).NotTo(Panic())
+		})
+	})
+
+	Describe("ETag and conditional requests", func() {
+		It("sets an ETag on the forwarded response on cache miss", func() {
+			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("payload"))
+			})
+			h := build(1024, next)
+
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, "/etag", "r1"))
+
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(rec.Header().Get("ETag")).NotTo(BeEmpty())
+		})
+
+		It("returns 304 Not Modified when If-None-Match matches the cached entry's ETag", func() {
+			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("payload"))
+			})
+			h := build(1024, next)
+
+			firstRec := httptest.NewRecorder()
+			h.ServeHTTP(firstRec, testutils.RequestWithRoute(http.MethodGet, "/etag", "r1"))
+			etag := firstRec.Header().Get("ETag")
+			Expect(etag).NotTo(BeEmpty())
+
+			req := testutils.RequestWithRoute(http.MethodGet, "/etag", "r1")
+			req.Header.Set("If-None-Match", etag)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			Expect(rec.Code).To(Equal(http.StatusNotModified))
+			Expect(rec.Body.Len()).To(Equal(0))
+		})
+
+		It("serves the full response when If-None-Match does not match", func() {
+			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("payload"))
+			})
+			h := build(1024, next)
+
+			// Warm the cache.
+			h.ServeHTTP(httptest.NewRecorder(), testutils.RequestWithRoute(http.MethodGet, "/etag", "r1"))
+
+			req := testutils.RequestWithRoute(http.MethodGet, "/etag", "r1")
+			req.Header.Set("If-None-Match", "deadbeef-does-not-match")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(rec.Body.String()).To(Equal("payload"))
+			Expect(rec.Header().Get("X-Cache")).To(Equal("HIT"))
+		})
+	})
+
+	Describe("route.NoCache", func() {
+		It("bypasses the cache entirely when the matched route has NoCache=true", func() {
+			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				nextCalled++
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("fresh"))
+			})
+			h := build(1024, next)
+
+			req := httptest.NewRequest(http.MethodGet, "/uncached", nil)
+			req = contexts.SetRPRoute(req, &models.RPRoute{Name: "uncached-route", NoCache: true})
+
+			h.ServeHTTP(httptest.NewRecorder(), req)
+			h.ServeHTTP(httptest.NewRecorder(), req)
+
+			Expect(nextCalled).To(Equal(2), "next should be called every time for NoCache routes")
+			Expect(store.getCalls).To(BeEmpty(), "cache.Get should never be consulted")
+			Expect(store.setCalls).To(BeEmpty(), "responses must not be stored")
+		})
+
+		It("still caches when NoCache is false (default)", func() {
+			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				nextCalled++
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("body"))
+			})
+			h := build(1024, next)
+
+			req := httptest.NewRequest(http.MethodGet, "/cached", nil)
+			req = contexts.SetRPRoute(req, &models.RPRoute{Name: "cached-route", NoCache: false})
+
+			h.ServeHTTP(httptest.NewRecorder(), req)
+			Expect(store.setCalls).To(HaveLen(1))
 		})
 	})
 })

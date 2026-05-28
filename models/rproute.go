@@ -87,6 +87,8 @@ type RPRoute struct {
 	// Timeout in seconds, defaults to 30
 	// I use uint here to avoid the need to check for below zero values
 	Timeout uint `yaml:"timeout"`
+	// NoCache disables caching of the upstream response, defaults to false
+	NoCache bool `yaml:"no_cache"`
 }
 
 func (r *RPRoute) Validate() error {

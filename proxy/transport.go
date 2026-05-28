@@ -3,27 +3,24 @@ package proxy
 import (
 	"net"
 	"net/http"
-	"time"
+
+	"github.com/ArthurHlt/rparth/config"
 )
 
-func DefaultProxyTransport() http.RoundTripper {
+func DefaultProxyTransport(transConfig config.Transport) http.RoundTripper {
 	return &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
+			Timeout:   transConfig.Timeout,
+			KeepAlive: transConfig.KeepAlive,
 		}).DialContext,
-		// this is a transport for a proxy
-		// so i enlarge connection pooling and lower down when connetion idle will timeout
-		// to release faster than default, and it will be coherent with keepalive above
-		MaxIdleConns:        1000,
-		MaxIdleConnsPerHost: 100,
-		IdleConnTimeout:     30 * time.Second,
-
-		ResponseHeaderTimeout: 30 * time.Second,
+		MaxIdleConns:          transConfig.MaxIdleConns,
+		MaxIdleConnsPerHost:   transConfig.MaxIdleConnsPerHost,
+		IdleConnTimeout:       transConfig.IdleConnTimeout,
+		ResponseHeaderTimeout: transConfig.ResponseHeaderTimeout,
 		// we do not let transport using compression to ensure
 		// we can pipe directly response to our own response
 		DisableCompression:  true,
-		TLSHandshakeTimeout: 10 * time.Second,
+		TLSHandshakeTimeout: transConfig.TLSHandshakeTimeout,
 	}
 }

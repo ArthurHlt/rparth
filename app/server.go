@@ -12,7 +12,7 @@ import (
 )
 
 func (a *App) RunServer(stopCtx, forceCtx context.Context) error {
-	proxyHandler := proxy.NewProxy(proxy.DefaultProxyTransport(), a.cnf.Routes)
+	proxyHandler := proxy.NewProxy(proxy.DefaultProxyTransport(a.cnf.Transport), a.cnf.Routes)
 	mds := append([]middlewares.Middleware{proxyHandler.MarkRPRouteRequest()}, a.middlewares...)
 	handler := middlewares.Chain(mds...)(proxyHandler)
 

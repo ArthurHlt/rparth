@@ -2,15 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project status
+## Project
 
-This is an in-progress reverse proxy library (`github.com/ArthurHlt/rparth`, Go 1.26). `main.go` is intentionally
-empty — the project is being built as packages first, with no CLI wiring yet.
+A reverse proxy (`github.com/ArthurHlt/rparth`, Go 1.26) shipped as a single binary. `main.go` is a Kong CLI with two
+commands: `serve` (reads `./config.yml` by default, runs the proxy) and `version`. Configuration is YAML and validated
+at decode time.
 
 ## Commands
 
 ```bash
-# Build (top-level main is currently empty, but verifies all packages compile)
+# Build everything
 go build ./...
 
 # Run all tests
@@ -18,53 +19,72 @@ ginkgo --randomize-all --randomize-suites --race -p ./...
 
 # Run a single package's suite
 ginkgo --randomize-all --randomize-suites --race -p ./proxy
-ginkgo --randomize-all --randomize-suites --race -p ./models
+ginkgo --randomize-all --randomize-suites --race -p ./middlewares
 
 # Run a single Ginkgo spec by description
 ginkgo --randomize-all --randomize-suites --race -p ./... --focus="<spec description regex>"
 
-# Lint (use golangci-lint, not bare `go vet` — config-driven, runs vet plus the rest)
+# Lint (config-driven; runs vet plus the rest — use this, not bare `go vet`)
 golangci-lint run ./...
 
 # Format
 gofmt -w .
+
+# Run the binary against the checked-in config.yml (serves HTTPS on 127.0.0.1:8443 with cert.crt/key.key)
+go run . serve -c ./config.yml
 ```
 
 Always run `golangci-lint run ./...` before considering work complete; do not substitute `go vet` alone.
 
-Tests use **Ginkgo v2 + Gomega**. Each package has a `*_suite_test.go` bootstrap that calls `RunSpecs`; actual
-`Describe`/`It` specs live in sibling `*_test.go` files inside the same `_test` package, so they exercise the public API
-only.
+Tests use **Ginkgo v2 + Gomega**. Each package has a `*_suite_test.go` bootstrap that calls `RunSpecs`; `Describe`/`It`
+specs live in sibling `*_test.go` files inside the same `_test` package, so they exercise the public API only.
 
 ## Architecture
 
-Two packages collaborate to do reverse-proxying:
+The request lifecycle, top-down:
 
-- **`models`** owns route configuration and matching. `RPRoute` is YAML-tagged (`yaml:"..."`) — config is intended to
-  come from YAML (goccy/go-yaml is a dependency). `RPRoutes.FindRoute` walks routes in order and returns the first that
-  `Match`es on host (optional) + path prefix. `Validate` defaults `Prefix` to `/`, `Timeout` to 30s, and `StripPrefix`
-  to `true`; it also canonicalizes any `Headers` keys via `textproto.CanonicalMIMEHeaderKey`. **Note**: `Match` reads
-  the request host from `req.Host` (the field) and runs it through `net.SplitHostPort`, falling back to the raw value
-  when there's no port — so a bare host like `api.example.com` does match a route with `Host: "api.example.com"`. Tests
-  set `req.Host` directly.
-- **`proxy`** owns request forwarding. `Proxy` is constructed with a `RoundTripper` + `RPRoutes` and implements
-  `http.Handler`. `roundTrip` clones the incoming request, rewrites `URL.Host`/`URL.Scheme` *and* `req.Host` (the field)
-  to the matched route's `Target` — both are required, since `http.Transport` derives the wire-level `Host:` header
-  from `req.Host`, not from `req.Header["Host"]`. It then sanitizes hop-by-hop headers on the request, injects
-  per-route headers, then injects proxy-set forwarding headers (see below), forwards via the transport, and sanitizes
-  hop-by-hop headers on the response. If `io.Copy` from the upstream body fails mid-stream, `ServeHTTP` only logs and
-  returns — it does **not** call `http.Error`, because the response has already been committed.
-  `DefaultProxyTransport` is a tuned `http.Transport` — bigger idle pool, shorter idle timeout, **compression disabled**
-  so the response body can be streamed straight to the client.
+1. **`main.go`** parses CLI flags with Kong, loads config, and calls `app.NewApp(cnf).RunServer(stopCtx, forceCtx)`.
+   `stopCtx` cancels on SIGINT/SIGTERM and triggers graceful shutdown (1 min timeout); a **second** signal cancels
+   `forceCtx` and aborts the shutdown wait. Don't conflate them — they're two separate contexts on purpose.
+2. **`app`** wires everything: logger (tint, or JSON when `log.in_json: true`), middleware chain, HTTP/HTTPS server,
+   listener. `NewApp` builds the full middleware stack; `NewAppBare` returns the App with no middlewares for tests.
+   `App.httpServerBuilder` is a seam: it returns a `*http.Server` *and* a pre-bound `net.Listener` so tests can inject
+   an httptest-style listener instead of racing on a free port. `SetServerBuilder` / `SetMiddlewares` are the test hooks.
+3. **`config`** decodes YAML via `goccy/go-yaml` with `yaml.UseJSONUnmarshaler()` — this is how `slog.Level` parses from
+   strings like `"debug"` (slog's `UnmarshalJSON` does the work). Each config struct has its own `UnmarshalYAML` that
+   fills defaults: server listen `:8080`, LRU size `100` / ttl `10m`, cache `max_size_item` 1 MiB. `RPRoutes` registers
+   a custom `*url.URL` unmarshaler so `target:` can be a plain string.
+4. **Middleware chain** (`middlewares.Chain` — first arg is outermost, runs first on the way in):
+   `proxy.MarkRPRouteRequest` → `AccessLog` → `Prometheus` (`/_metrics`) → `MetricsHttp` → `Cache` (only if configured)
+   → `Proxy` handler. **`MarkRPRouteRequest` must stay first** because it puts the matched `*RPRoute` on the request
+   context; everything downstream (access log `route_name`, prom labels, cache key) reads it via
+   `contexts.GetRPRoute`. Unmatched requests get no route in context, and downstream code defaults the label to
+   `"unknown"` — `contexts.SetRPRoute` returns the request unchanged when the route is nil, so don't add a "nil route"
+   sentinel.
 
-### Hop-by-hop header handling
+### Proxy package
+
+`proxy.Proxy` is constructed with a `RoundTripper` + `RPRoutes` and implements `http.Handler`. `roundTrip` reads the
+matched route from the request context (set by `MarkRPRouteRequest`, *not* re-matched here), clones the request,
+rewrites `URL.Host`/`URL.Scheme` *and* `req.Host` (the field) to the route's `Target` — both are required, since
+`http.Transport` derives the wire-level `Host:` header from `req.Host`, not from `req.Header["Host"]`. It then
+sanitizes hop-by-hop headers on the request, injects per-route headers, then injects proxy-set forwarding headers
+(see below), forwards via the transport, and sanitizes hop-by-hop headers on the response. If `io.Copy` from the
+upstream body fails mid-stream, `ServeHTTP` only logs and returns — it does **not** call `http.Error`, because the
+response has already been committed. Errors from `roundTrip` map to `502 Bad Gateway`, except `models.ErrNoRoute`
+which is a `500` (it means routing failed *after* `MarkRPRouteRequest` ran — a config/programmer bug).
+
+`DefaultProxyTransport` is a tuned `http.Transport` — bigger idle pool, shorter idle timeout, **compression disabled**
+so the response body can be streamed straight to the client.
+
+#### Hop-by-hop header handling
 
 `proxy.go` keeps two parallel structures (`hopByHopHeadersMap` for O(1) membership checks, `hopByHopHeaders` slice for
 iteration, populated from the map in `init`). Per RFC 7230, the `Connection` header can list additional
 connection-scoped headers — `sanitizeHopByHopHeaders` strips both the canonical set and anything named in `Connection`.
 Preserve this dual-structure pattern when adding hop-by-hop headers.
 
-### Proxy-set forwarding headers
+#### Proxy-set forwarding headers
 
 `proxyHeaders` adds these headers to the **upstream request** (not the response sent to the client):
 
@@ -80,17 +100,63 @@ Preserve this dual-structure pattern when adding hop-by-hop headers.
 These are applied *after* hop-by-hop sanitization and *after* per-route headers, so route headers cannot override the
 forwarding chain.
 
-### HTTP/2 decision
+#### HTTP/2 decision
 
 Per `journey.md.crap`, HTTP/2 was deliberately **not** forced upstream: it would reduce TCP connections but complicates
 response streaming (which this proxy relies on for body forwarding). If you reintroduce HTTP/2, you must rework the
 streaming response path accordingly.
 
+### Models package
+
+`RPRoute` is YAML-tagged (`yaml:"..."`). `RPRoutes.FindRoute` walks routes in order and returns the first that `Match`es
+on host (optional) + path prefix. `Validate` defaults `Prefix` to `/`, `Timeout` to 30s, and `StripPrefix` to `true`,
+canonicalizes any `Headers` keys via `textproto.CanonicalMIMEHeaderKey`, and rejects duplicate route names. **Note**:
+`Match` reads the request host from `req.Host` (the field) and runs it through `net.SplitHostPort`, falling back to the
+raw value when there's no port — so a bare host like `api.example.com` does match a route with `Host:
+"api.example.com"`. Tests set `req.Host` directly.
+
+### Caching
+
+Two-layer system: a `caches.Cache` interface (`Get`/`Set`/`Contains`) with `LRUExpirable` (hashicorp/golang-lru/v2) as
+the only implementation, wrapped by `CacheMetrics` (decorator that records Prometheus metrics). Cache wiring lives in
+`app.makeCacheHandler` — if `cache.lru` is absent in YAML, the cache middleware is omitted from the chain entirely
+(logged as "cache is disabled").
+
+The HTTP-level cache logic is in `middlewares/cache.go`:
+
+- **Key** = xxhash of `method + URL + routeName + Authorization + Cookie`. Authorization/Cookie are included so
+  authenticated users don't read each other's cached responses.
+- **Request rules**: only `GET`; bypassed if request has `Cache-Control: no-store` or `no-cache`.
+- **Response rules**: skip if `Set-Cookie` / `Vary` present, or `Cache-Control` lists `no-store`/`no-cache`/`private`,
+  or status `<200` / `>=400`, or body exceeds `cache.max_size_item`.
+- Sets `ETag: <key>` on every cached/cacheable response; returns `304 Not Modified` on matching `If-None-Match`;
+  adds `X-Cache: HIT` when serving from cache.
+- `cacheResponseWriter` implements `Flush` so streaming responses still flush through the wrapper.
+
+### Observability
+
+- **Access log**: `httplog/v3` with OTEL schema, panics recovered, `route_name` added as an extra attribute.
+- **Prometheus**: scrape endpoint on `/_metrics` (served by the `Prometheus` middleware short-circuiting the chain).
+  Four metric families, all on the default registry via `promauto`:
+  - `http_requests_total{route_name,method,status}` / `http_request_duration_seconds` — middleware-level (sees the
+    full chain including cache hits).
+  - `http_proxy_requests_total{...}` / `http_proxy_request_duration_seconds` — proxy-level (only upstream calls).
+  - `cache_hits_total` / `cache_misses_total` / `cache_lookup_latency_seconds` / `cache_size`.
+
 ## Conventions
 
 - Files ending in `.crap` and the `.crap/` directory are personal scratch (notes, throwaway snippets). Don't read them
   as authoritative and don't modify them unless asked.
-- Errors are plain `errors.New` — no error wrapping framework is in use yet.
+- Errors are plain `errors.New` / `fmt.Errorf` (with `%w` where wrapping is useful) — no error wrapping framework.
+- Per-package metrics go in a `metrics.go` file in that package, registered with `promauto` against the default
+  registry. There is no central metrics module.
 - Proxy tests use a `fakeTransport` (implements `http.RoundTripper`) that captures the forwarded request and returns a
   programmable response — prefer this over `httptest.Server` so assertions can inspect headers directly on
   `transport.received`.
+- App-level tests should use `app.NewAppBare(cnf)` plus `SetMiddlewares` / `SetServerBuilder` to keep the unit under
+  test small.
+- Shared test helpers live in the `testutils` package (`RequestWithRoute`, `MustYamlParseURL`, `AssetPath`). Reach for
+  them before inventing local equivalents.
+- Per `.golangci.yml`, the `typecheck` linter is disabled in `*_test.go` files, and `errcheck` excludes a curated list
+  of "we deliberately ignore this" functions (e.g. `(http.ResponseWriter).Write`, `xxhash.Digest.WriteString`). If you
+  add another such call, extend the exclusion list rather than littering `_ = ...` assignments.
