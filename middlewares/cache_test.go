@@ -1,6 +1,7 @@
 package middlewares_test
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,18 +15,8 @@ import (
 	"github.com/ArthurHlt/rparth/contexts"
 	"github.com/ArthurHlt/rparth/middlewares"
 	"github.com/ArthurHlt/rparth/models"
+	tumocks "github.com/ArthurHlt/rparth/testutils/mocks"
 )
-
-type flushRecorder struct {
-	*httptest.ResponseRecorder
-	flushes int
-}
-
-func newFlushRecorder() *flushRecorder {
-	return &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
-}
-
-func (f *flushRecorder) Flush() { f.flushes++ }
 
 var _ = Describe("Cache middleware", func() {
 	var (
@@ -473,34 +464,30 @@ var _ = Describe("Cache middleware", func() {
 	})
 
 	Describe("Flush", func() {
-		It("forwards Flush to an underlying http.Flusher", func() {
-			rec := newFlushRecorder()
+		It("forwards Flush to the underlying http.Flusher via the Unwrap chain", func() {
+			// cacheResponseWriter exposes Unwrap (not Flush), so a direct
+			// w.(http.Flusher) assertion would miss it; ResponseController walks
+			// Unwrap() to reach the flusher underneath.
+			rw := tumocks.NewMockResponseWriterFlusher(gomock.NewController(GinkgoT()))
+			var body bytes.Buffer
+			rw.EXPECT().Header().Return(http.Header{}).AnyTimes()
+			rw.EXPECT().WriteHeader(gomock.Any()).AnyTimes()
+			rw.EXPECT().Write(gomock.Any()).DoAndReturn(func(p []byte) (int, error) {
+				return body.Write(p)
+			}).AnyTimes()
+			rw.EXPECT().Flush().Times(1)
+
 			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Write([]byte("part-"))
-				w.(http.Flusher).Flush()
+				http.NewResponseController(w).Flush()
 				w.Write([]byte("rest"))
 			})
 			h := build(1024, next)
 
-			h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, "/stream", "r1"))
+			h.ServeHTTP(rw, testutils.RequestWithRoute(http.MethodGet, "/stream", "r1"))
 
-			Expect(rec.flushes).To(Equal(1))
-			Expect(rec.Body.String()).To(Equal("part-rest"))
+			Expect(body.String()).To(Equal("part-rest"))
 			Expect(string(onlyEntry().Body)).To(Equal("part-rest"))
-		})
-
-		It("is a no-op when the underlying writer does not implement http.Flusher", func() {
-			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Write([]byte("body"))
-				// httptest.ResponseRecorder does not implement http.Flusher; the
-				// cacheResponseWriter must not panic when its parent lacks Flush.
-				w.(http.Flusher).Flush()
-			})
-			h := build(1024, next)
-
-			Expect(func() {
-				h.ServeHTTP(httptest.NewRecorder(), testutils.RequestWithRoute(http.MethodGet, "/no-flush", "r1"))
-			}).NotTo(Panic())
 		})
 	})
 

@@ -1,6 +1,7 @@
 package proxy_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -23,6 +24,7 @@ import (
 	"github.com/ArthurHlt/rparth/models"
 	"github.com/ArthurHlt/rparth/proxy"
 	"github.com/ArthurHlt/rparth/proxy/mocks"
+	tumocks "github.com/ArthurHlt/rparth/testutils/mocks"
 )
 
 // timeoutNetError is a net.Error whose Timeout() reports true, used to exercise
@@ -32,6 +34,24 @@ type timeoutNetError struct{}
 func (timeoutNetError) Error() string   { return "i/o timeout" }
 func (timeoutNetError) Timeout() bool   { return true }
 func (timeoutNetError) Temporary() bool { return false }
+
+// chunkBody yields each chunk on a separate Read (then EOF), mimicking an
+// upstream that trickles data so we can observe per-chunk forwarding.
+type chunkBody struct {
+	chunks []string
+	i      int
+}
+
+func (c *chunkBody) Read(p []byte) (int, error) {
+	if c.i >= len(c.chunks) {
+		return 0, io.EOF
+	}
+	n := copy(p, c.chunks[c.i])
+	c.i++
+	return n, nil
+}
+
+func (c *chunkBody) Close() error { return nil }
 
 func newResponse(status int, body string, headers http.Header) *http.Response {
 	if headers == nil {
@@ -459,6 +479,48 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 
 			_, ok := received.Context().Deadline()
 			Expect(ok).To(BeFalse())
+		})
+	})
+
+	Describe("response streaming", func() {
+		It("flushes after each chunk read from upstream", func() {
+			rw := tumocks.NewMockResponseWriterFlusher(gomock.NewController(GinkgoT()))
+
+			var body bytes.Buffer
+			rw.EXPECT().Header().Return(http.Header{}).AnyTimes()
+			rw.EXPECT().WriteHeader(http.StatusOK)
+			rw.EXPECT().Write(gomock.Any()).DoAndReturn(func(p []byte) (int, error) {
+				return body.Write(p)
+			}).AnyTimes()
+			rw.EXPECT().Flush().Times(3) // one flush per forwarded chunk
+
+			response = &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+				Body:       &chunkBody{chunks: []string{"one", "two", "three"}},
+			}
+
+			serve(p, rw, newRequest("api.example.com:80", "/", nil))
+
+			Expect(body.String()).To(Equal("onetwothree"))
+		})
+
+		It("stops forwarding when a client write fails mid-stream", func() {
+			rw := tumocks.NewMockResponseWriterFlusher(gomock.NewController(GinkgoT()))
+
+			rw.EXPECT().Header().Return(http.Header{}).AnyTimes()
+			rw.EXPECT().WriteHeader(http.StatusOK)
+			// Exactly one write attempt, which fails; the copy must abort, so no
+			// further Write and no Flush follow — gomock fails the spec otherwise.
+			rw.EXPECT().Write(gomock.Any()).Return(0, errors.New("client gone")).Times(1)
+
+			response = &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+				Body:       &chunkBody{chunks: []string{"one", "two", "three"}},
+			}
+
+			serve(p, rw, newRequest("api.example.com:80", "/", nil))
 		})
 	})
 })

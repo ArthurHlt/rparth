@@ -95,11 +95,8 @@ func (c *cacheResponseWriter) injectCacheHttpHeader() {
 	c.w.Header().Set("ETag", c.key)
 }
 
-func (c *cacheResponseWriter) Flush() {
-	flusher, ok := c.w.(http.Flusher)
-	if ok {
-		flusher.Flush()
-	}
+func (c *cacheResponseWriter) Unwrap() http.ResponseWriter {
+	return c.w
 }
 
 func (c *cacheResponseWriter) finalize() {

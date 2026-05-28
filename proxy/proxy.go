@@ -89,12 +89,34 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		w.Header()[k] = v
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, err = io.Copy(w, resp.Body)
+	err = p.copyData(w, resp.Body)
 	if err != nil {
 		slog.Error("error writing response", "err", err, "url", req.URL.String(), "method", req.Method)
 		return
 	}
 	slog.Debug("request finished", "url", req.URL.String(), "method", req.Method)
+}
+
+func (p *Proxy) copyData(w http.ResponseWriter, reader io.Reader) error {
+	rc := http.NewResponseController(w)
+	// Stream chunk-by-chunk, flushing after each write so trickle responses
+	// (SSE, long-poll) reach the client immediately instead of buffering.
+	buf := make([]byte, 32*1024)
+	for {
+		n, rErr := reader.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			rc.Flush()
+		}
+		if rErr != nil {
+			if rErr == io.EOF {
+				return nil
+			}
+			return rErr
+		}
+	}
 }
 
 func (p *Proxy) roundTrip(route *models.RPRoute, req *http.Request) (*http.Response, error) {
