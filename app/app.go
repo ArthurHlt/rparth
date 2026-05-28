@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ArthurHlt/rparth/caches"
 	"github.com/ArthurHlt/rparth/config"
 	"github.com/ArthurHlt/rparth/middlewares"
 	"github.com/lmittmann/tint"
@@ -38,6 +39,7 @@ func NewApp(cnf *config.Config) *App {
 		middlewares.AccessLog(cnf.Log.Level),
 		middlewares.Prometheus(),
 		middlewares.MetricsHttp(),
+		middlewares.Cache(app.makeCacheHandler()),
 	}
 	return app
 }
@@ -73,4 +75,17 @@ func (a *App) preInit() {
 		})
 	}
 	slog.SetDefault(slog.New(handler))
+}
+
+func (a *App) makeCacheStore() caches.Cache {
+	return caches.NewLRUExpirable(
+		100,
+		nil,
+		10*time.Minute,
+	)
+}
+
+func (a *App) makeCacheHandler() *middlewares.CacheHandler {
+	// 1 MiB max cached body size
+	return middlewares.NewCacheHandler(a.makeCacheStore(), 1024*1024)
 }

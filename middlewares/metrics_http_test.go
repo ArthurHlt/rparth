@@ -38,7 +38,7 @@ var _ = Describe("MetricsHttp middleware", func() {
 			"unique route name should not appear in registry before the request")
 
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, routeName))
+		h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, "/", routeName))
 
 		body := scrapeMetrics()
 		Expect(body).To(ContainSubstring(fmt.Sprintf(
@@ -56,7 +56,7 @@ var _ = Describe("MetricsHttp middleware", func() {
 		h := middlewares.MetricsHttp()(next)
 
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, routeName))
+		h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, "/", routeName))
 
 		Expect(scrapeMetrics()).To(ContainSubstring(fmt.Sprintf(
 			`http_requests_total{method="GET",route_name="%s",status="200"} 1`, routeName)))
@@ -71,7 +71,7 @@ var _ = Describe("MetricsHttp middleware", func() {
 		h := middlewares.MetricsHttp()(next)
 
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodPost, routeName))
+		h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodPost, "/", routeName))
 
 		body := scrapeMetrics()
 		Expect(body).To(ContainSubstring(fmt.Sprintf(
@@ -89,7 +89,7 @@ var _ = Describe("MetricsHttp middleware", func() {
 		h := middlewares.MetricsHttp()(next)
 
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, routeName))
+		h.ServeHTTP(rec, testutils.RequestWithRoute(http.MethodGet, "/", routeName))
 
 		Expect(scrapeMetrics()).To(ContainSubstring(fmt.Sprintf(
 			`http_requests_total{method="GET",route_name="%s",status="200"} 1`, routeName)))

@@ -84,7 +84,7 @@ var _ = Describe("AccessLog middleware", func() {
 		})
 		h := middlewares.AccessLog(slog.LevelInfo)(next)
 
-		req := testutils.RequestWithRoute(http.MethodGet, "access-log-test-route")
+		req := testutils.RequestWithRoute(http.MethodGet, "/", "access-log-test-route")
 		h.ServeHTTP(httptest.NewRecorder(), req)
 
 		Expect(captured.records).To(HaveLen(1))
