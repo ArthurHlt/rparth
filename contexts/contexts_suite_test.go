@@ -1,4 +1,4 @@
-package main_test
+package contexts_test
 
 import (
 	"testing"
@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-func TestRparth(t *testing.T) {
+func TestContexts(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Rparth Suite")
+	RunSpecs(t, "Contexts Suite")
 }

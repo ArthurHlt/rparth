@@ -24,3 +24,11 @@ func GetRPRoute(req *http.Request) *models.RPRoute {
 	route, _ := req.Context().Value(routeContextKey).(*models.RPRoute)
 	return route
 }
+
+func GetRouteName(req *http.Request) string {
+	route := GetRPRoute(req)
+	if route == nil {
+		return "unknown"
+	}
+	return route.Name
+}

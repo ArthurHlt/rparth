@@ -64,16 +64,28 @@ func (r *RedisCache) Set(key string, data *models.CacheData) {
 	}
 }
 
-func (r *RedisCache) Contains(key string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	n, err := r.client.Exists(ctx, redisKeyPrefix+key).Result()
-	if err != nil {
-		return false
-	}
-	return n > 0
-}
-
 func (r *RedisCache) Close() error {
 	return r.client.Close()
+}
+
+func (r *RedisCache) Len() int {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var (
+		count  int
+		cursor uint64
+	)
+	for {
+		keys, next, err := r.client.Scan(ctx, cursor, redisKeyPrefix+"*", 100).Result()
+		if err != nil {
+			slog.Warn("redis cache len failed", "err", err)
+			return 0
+		}
+		count += len(keys)
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	return count
 }

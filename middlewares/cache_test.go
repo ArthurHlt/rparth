@@ -51,13 +51,6 @@ func (f *fakeCache) Delete(key string) {
 	delete(f.data, key)
 }
 
-func (f *fakeCache) Contains(key string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	_, ok := f.data[key]
-	return ok
-}
-
 func (f *fakeCache) onlyEntry() *models.CacheData {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -66,6 +59,12 @@ func (f *fakeCache) onlyEntry() *models.CacheData {
 		return v
 	}
 	return nil
+}
+
+func (f *fakeCache) Len() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.data)
 }
 
 type flushRecorder struct {
@@ -618,5 +617,80 @@ var _ = Describe("Cache middleware", func() {
 			h.ServeHTTP(httptest.NewRecorder(), req)
 			Expect(store.setCalls).To(HaveLen(1))
 		})
+	})
+
+	Describe("skip metrics", func() {
+		skipCount := func(routeName, reason string) float64 {
+			return testutils.MetricValue("cache_skip_total", map[string]string{
+				"route_name": routeName,
+				"reason":     reason,
+			})
+		}
+
+		It("records method_not_allowed for non-GET requests", func() {
+			h := build(1024, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusCreated)
+			}))
+
+			before := skipCount("r1", "method_not_allowed")
+			h.ServeHTTP(httptest.NewRecorder(), testutils.RequestWithRoute(http.MethodPost, "/foo", "r1"))
+			Expect(skipCount("r1", "method_not_allowed") - before).To(Equal(float64(1)))
+		})
+
+		It("records cache_control when the request asks to bypass the cache", func() {
+			h := build(1024, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			req := testutils.RequestWithRoute(http.MethodGet, "/foo", "r1")
+			req.Header.Set("Cache-Control", "no-store")
+			before := skipCount("r1", "cache_control")
+			h.ServeHTTP(httptest.NewRecorder(), req)
+			Expect(skipCount("r1", "cache_control") - before).To(Equal(float64(1)))
+		})
+
+		It("records disabled when the matched route has NoCache=true", func() {
+			h := build(1024, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "/foo", nil)
+			req = contexts.SetRPRoute(req, &models.RPRoute{Name: "off", NoCache: true})
+			before := skipCount("off", "disabled")
+			h.ServeHTTP(httptest.NewRecorder(), req)
+			Expect(skipCount("off", "disabled") - before).To(Equal(float64(1)))
+		})
+
+		DescribeTable("records the response-level reason and does not store the entry",
+			func(maxBody int, configure func(http.ResponseWriter), reason string) {
+				h := build(maxBody, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					configure(w)
+				}))
+
+				before := skipCount("r1", reason)
+				h.ServeHTTP(httptest.NewRecorder(), testutils.RequestWithRoute(http.MethodGet, "/foo", "r1"))
+
+				Expect(skipCount("r1", reason) - before).To(Equal(float64(1)))
+				Expect(store.setCalls).To(BeEmpty())
+			},
+			Entry("status code outside 2xx/3xx", 1024, func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte("err"))
+			}, "status_code"),
+			Entry("Set-Cookie present", 1024, func(w http.ResponseWriter) {
+				w.Header().Set("Set-Cookie", "s=1")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("ok"))
+			}, "set_cookie"),
+			Entry("Vary present", 1024, func(w http.ResponseWriter) {
+				w.Header().Set("Vary", "Accept")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("ok"))
+			}, "vary"),
+			Entry("body exceeds max size", 4, func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("way too large"))
+			}, "too_large"),
+		)
 	})
 })

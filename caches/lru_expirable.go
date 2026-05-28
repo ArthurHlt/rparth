@@ -40,10 +40,10 @@ func (l *LRUExpirable) Set(key string, data *models.CacheData) {
 	l.lruCache.Add(key, data)
 }
 
-func (l *LRUExpirable) Contains(key string) bool {
-	return l.lruCache.Contains(key)
-}
-
 func (l *LRUExpirable) Delete(key string) {
 	l.lruCache.Remove(key)
+}
+
+func (l *LRUExpirable) Len() int {
+	return l.lruCache.Len()
 }

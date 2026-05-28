@@ -10,14 +10,14 @@ import (
 )
 
 // fakeStore is a minimal caches.Cache implementation that lets us script
-// Get/Contains independently — needed to exercise the "previously contained
-// but now gone" decrement path in CacheMetrics.Get.
+// Get/Contains/Len independently so we can assert how CacheMetrics maps the
+// underlying store length onto the cache_size gauge.
 type fakeStore struct {
-	getReturns      *models.CacheData
-	getOk           bool
-	containsReturns bool
-	lastSetKey      string
-	lastSetData     *models.CacheData
+	getReturns  *models.CacheData
+	getOk       bool
+	lenReturns  int
+	lastSetKey  string
+	lastSetData *models.CacheData
 }
 
 func (f *fakeStore) Get(string) (*models.CacheData, bool) {
@@ -29,11 +29,9 @@ func (f *fakeStore) Set(key string, data *models.CacheData) {
 	f.lastSetData = data
 }
 
-func (f *fakeStore) Contains(string) bool {
-	return f.containsReturns
-}
-
 func (f *fakeStore) Close() error { return nil }
+
+func (f *fakeStore) Len() int { return f.lenReturns }
 
 // metricValue reads a single-cell counter or gauge from the default
 // Prometheus registry by name. The caches/metrics.go vars are registered on
@@ -87,6 +85,11 @@ var _ = Describe("CacheMetrics", func() {
 		store = &fakeStore{}
 		cache = caches.NewCacheMetrics(store)
 	})
+	
+	AfterEach(func() {
+		err := cache.Close()
+		Expect(err).NotTo(HaveOccurred())
+	})
 
 	Describe("Get", func() {
 		It("delegates to the underlying store and returns the payload on a hit", func() {
@@ -128,24 +131,12 @@ var _ = Describe("CacheMetrics", func() {
 			Expect(metricValue("cache_misses_total") - before).To(Equal(float64(1)))
 		})
 
-		It("decrements cache_size when the key was contained but is now gone", func() {
-			before := metricValue("cache_size")
-
-			store.containsReturns = true
+		It("updates cache_size to the underlying store length", func() {
 			store.getOk = false
-			cache.Get("expired")
-
-			Expect(metricValue("cache_size") - before).To(Equal(float64(-1)))
-		})
-
-		It("does not touch cache_size on a regular miss (never contained)", func() {
-			before := metricValue("cache_size")
-
-			store.containsReturns = false
-			store.getOk = false
+			store.lenReturns = 4
 			cache.Get("absent")
 
-			Expect(metricValue("cache_size")).To(Equal(before))
+			Expect(metricValue("cache_size")).To(Equal(float64(4)))
 		})
 	})
 
@@ -158,21 +149,10 @@ var _ = Describe("CacheMetrics", func() {
 			Expect(store.lastSetData).To(BeIdenticalTo(payload))
 		})
 
-		It("increments cache_size", func() {
-			before := metricValue("cache_size")
+		It("updates cache_size to the underlying store length", func() {
+			store.lenReturns = 3
 			cache.Set("k", &models.CacheData{Status: 200})
-			Expect(metricValue("cache_size") - before).To(Equal(float64(1)))
-		})
-	})
-
-	Describe("Contains", func() {
-		It("delegates to the underlying store", func() {
-			store.containsReturns = true
-			Expect(cache.Contains("a")).To(BeTrue())
-
-			store.containsReturns = false
-			Expect(cache.Contains("a")).To(BeFalse())
+			Expect(metricValue("cache_size")).To(Equal(float64(3)))
 		})
 	})
 })
-

@@ -126,7 +126,7 @@ func (p *Proxy) roundTrip(req *http.Request) (*http.Response, error) {
 	start := time.Now()
 	resp, err := p.transport.RoundTrip(reqProxy)
 	if err != nil {
-		httpProxyRequestsTotal.WithLabelValues(route.Name, reqProxy.Method, "502").Inc()
+		httpProxyErrorsTotal.WithLabelValues(route.Name, reqProxy.Method, string(proxyErrorReason(err))).Inc()
 		httpProxyRequestDuration.WithLabelValues(route.Name, reqProxy.Method, "502").
 			Observe(time.Since(start).Seconds())
 		slog.Error(

@@ -17,6 +17,13 @@ shared Redis), Prometheus metrics, and structured access logs.
 
 ## Install
 
+**Download a pre-built binary** — grab the latest build for your OS/architecture from the
+[GitHub releases page](https://github.com/ArthurHlt/rparth/releases/latest). Each release attaches
+ready-to-run binaries and archives (Linux, macOS, Windows) plus checksums; extract the archive and the
+`rparth` binary is ready to run.
+
+Other options:
+
 ```bash
 # From source (Go 1.26+)
 go install github.com/ArthurHlt/rparth@latest
@@ -24,8 +31,6 @@ go install github.com/ArthurHlt/rparth@latest
 # Container image
 docker pull ghcr.io/arthurhlt/rparth:latest
 ```
-
-Pre-built binaries and archives are attached to each [GitHub release](https://github.com/ArthurHlt/rparth/releases).
 
 ## Usage
 
@@ -230,16 +235,46 @@ schema, labeled with the matched `route_name`.
 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
+| `rparth_build_info` | gauge | `version`, `commit`, `date` | Always `1`; the build metadata is carried in the labels. |
 | `http_requests_total` | counter | `route_name`, `method`, `status` | Requests handled by the full middleware chain, including cache hits. |
 | `http_request_duration_seconds` | histogram | `route_name`, `method`, `status` | Request duration measured across the full middleware chain. |
+| `http_requests_in_flight` | gauge | `route_name` | Requests currently being handled. |
 | `http_proxy_requests_total` | counter | `route_name`, `method`, `status` | Requests forwarded upstream (proxy layer only; excludes cache hits). |
 | `http_proxy_request_duration_seconds` | histogram | `route_name`, `method`, `status` | Duration of upstream requests only. |
+| `http_proxy_errors_total` | counter | `route_name`, `method`, `reason` | Upstream requests that failed before a response was received, by `reason` (see below). |
 | `cache_hits_total` | counter | — | Number of cache hits. |
 | `cache_misses_total` | counter | — | Number of cache misses. |
 | `cache_lookup_latency_seconds` | histogram | — | Cache lookup latency, observed on hits. |
-| `cache_size` | gauge | — | Number of items currently in the cache. |
+| `cache_size` | gauge | — | Number of items currently in the cache (sampled at scrape time). |
+| `cache_skip_total` | counter | `route_name`, `reason` | Responses that were not cached, by `reason` (see below). |
 
 The `cache_*` metrics are only emitted when a cache backend is configured.
+
+### The `reason` label
+
+`http_proxy_errors_total` classifies each upstream failure into one of:
+
+| `reason` | Meaning |
+| --- | --- |
+| `timeout` | The upstream did not respond within the route/transport timeout (includes context deadline). |
+| `canceled` | The client disconnected before the upstream responded (context canceled). |
+| `dns` | The upstream host could not be resolved. |
+| `connection_refused` | The upstream refused the TCP connection. |
+| `tls` | The upstream TLS handshake/certificate verification failed. |
+| `connection` | Other network-level failure (reset, unreachable, broken pipe, …). |
+| `unknown` | An error that did not match any of the above. |
+
+`cache_skip_total` records why a cacheable path was not stored:
+
+| `reason` | Meaning |
+| --- | --- |
+| `disabled` | The matched route has `no_cache: true`. |
+| `method_not_allowed` | The request method is not `GET`. |
+| `cache_control` | The request or response asked to bypass the cache (`no-store`/`no-cache`/`private`). |
+| `too_large` | The response body exceeded `cache.max_size_item`. |
+| `status_code` | The response status was `< 200` or `>= 400`. |
+| `set_cookie` | The response set a `Set-Cookie` header (per-client). |
+| `vary` | The response carried a `Vary` header. |
 
 ## License
 

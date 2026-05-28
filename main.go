@@ -73,6 +73,8 @@ var cli struct {
 }
 
 func main() {
+	metricBuildInfo.WithLabelValues(version, commit, date).Set(1)
+
 	ctx := kong.Parse(&cli)
 	err := ctx.Run()
 	ctx.FatalIfErrorf(err)

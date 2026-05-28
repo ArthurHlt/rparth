@@ -25,6 +25,7 @@ type cacheResponseWriter struct {
 	buf           *bytes.Buffer
 	maxBodySize   int
 	shouldCache   bool
+	noCacheReason cacheSkipReason
 	key           string
 	headerWritten bool
 }
@@ -47,6 +48,7 @@ func (c *cacheResponseWriter) Header() http.Header {
 func (c *cacheResponseWriter) Write(p []byte) (int, error) {
 	if c.shouldCache {
 		if c.maxBodySize > 0 && c.buf.Len()+len(p) > c.maxBodySize {
+			c.noCacheReason = cacheSkipReasonTooLarge
 			c.shouldCache = false
 			c.buf.Reset()
 		} else {
@@ -59,14 +61,17 @@ func (c *cacheResponseWriter) Write(p []byte) (int, error) {
 func (c *cacheResponseWriter) allowCachingFromHeaders(h http.Header) bool {
 	// Set-Cookie is per-client so we should not cache
 	if h.Get("Set-Cookie") != "" {
+		c.noCacheReason = cacheSkipReasonSetCookie
 		return false
 	}
 	// if response can vary we should not cache
 	if h.Get("Vary") != "" {
+		c.noCacheReason = cacheSkipReasonVary
 		return false
 	}
 	// if response has cache control directives we follow where we should not cache
 	if hasCacheControl(h, "no-store", "no-cache", "private") {
+		c.noCacheReason = cacheSkipReasonCacheControl
 		return false
 	}
 	return true
@@ -77,6 +82,7 @@ func (c *cacheResponseWriter) WriteHeader(statusCode int) {
 	c.injectCacheHttpHeader()
 	c.cacheData.Status = statusCode
 	if statusCode >= 400 || statusCode < 200 {
+		c.noCacheReason = cacheSkipReasonStatusCode
 		c.shouldCache = false
 	}
 	if c.shouldCache {
@@ -117,15 +123,10 @@ func NewCacheHandler(store caches.Cache, maxBodySize int) *CacheHandler {
 }
 
 func (c *CacheHandler) makeHash(r *http.Request) string {
-	route := contexts.GetRPRoute(r)
-	routeName := "unknown"
-	if route != nil {
-		routeName = route.Name
-	}
 	h := xxhash.New()
 	h.WriteString(r.Method)
 	h.WriteString(r.URL.String())
-	h.WriteString(routeName)
+	h.WriteString(contexts.GetRouteName(r))
 	// user can set Authorization and Cookie headers
 	// which means that user is authenticated, to avoid that another user get the content of another
 	// we hash the Authorization and Cookie headers too if there is ones
@@ -140,18 +141,18 @@ func (c *CacheHandler) makeHash(r *http.Request) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-func (c *CacheHandler) allowCaching(r *http.Request) bool {
+func (c *CacheHandler) allowCaching(r *http.Request) (bool, cacheSkipReason) {
 	route := contexts.GetRPRoute(r)
 	if route != nil && route.NoCache {
-		return false
+		return false, cacheSkipReasonDisabled
 	}
 	if r.Method != http.MethodGet {
-		return false
+		return false, cacheSkipReasonMethodNotAllowed
 	}
 	if hasCacheControl(r.Header, "no-store", "no-cache") {
-		return false
+		return false, cacheSkipReasonCacheControl
 	}
-	return true
+	return true, ""
 }
 
 func hasCacheControl(h http.Header, directives ...string) bool {
@@ -181,7 +182,10 @@ func (c *CacheHandler) serveFromCache(key string, item *models.CacheData, w http
 
 func (c *CacheHandler) serveMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !c.allowCaching(r) {
+		routeName := contexts.GetRouteName(r)
+		shouldCache, reason := c.allowCaching(r)
+		if !shouldCache {
+			cacheSkip.WithLabelValues(routeName, string(reason)).Inc()
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -195,6 +199,7 @@ func (c *CacheHandler) serveMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(crw, r)
 		crw.finalize()
 		if !crw.shouldCache {
+			cacheSkip.WithLabelValues(routeName, string(crw.noCacheReason)).Inc()
 			return
 		}
 		c.store.Set(key, crw.cacheData)

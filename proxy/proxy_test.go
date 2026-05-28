@@ -1,13 +1,17 @@
 package proxy_test
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ArthurHlt/rparth/testutils"
@@ -18,6 +22,14 @@ import (
 	"github.com/ArthurHlt/rparth/models"
 	"github.com/ArthurHlt/rparth/proxy"
 )
+
+// timeoutNetError is a net.Error whose Timeout() reports true, used to exercise
+// the non-context timeout branch of the proxy error classifier.
+type timeoutNetError struct{}
+
+func (timeoutNetError) Error() string   { return "i/o timeout" }
+func (timeoutNetError) Timeout() bool   { return true }
+func (timeoutNetError) Temporary() bool { return false }
 
 // fakeTransport captures the request it receives and returns a programmable response (or error).
 type fakeTransport struct {
@@ -140,6 +152,27 @@ var _ = Describe("Proxy.ServeHTTP", func() {
 			Expect(w.Code).To(Equal(http.StatusBadGateway))
 			Expect(w.Body.String()).To(ContainSubstring("dial failed"))
 		})
+
+		DescribeTable("classifies upstream transport errors into http_proxy_errors_total reasons",
+			func(rtErr error, reason string) {
+				labels := map[string]string{"route_name": "api", "method": http.MethodGet, "reason": reason}
+				before := testutils.MetricValue("http_proxy_errors_total", labels)
+
+				transport.err = rtErr
+				serve(p, w, newRequest("api.example.com:80", "/", nil))
+
+				Expect(w.Code).To(Equal(http.StatusBadGateway))
+				Expect(testutils.MetricValue("http_proxy_errors_total", labels) - before).To(Equal(float64(1)))
+			},
+			Entry("context deadline", context.DeadlineExceeded, "timeout"),
+			Entry("context canceled", context.Canceled, "canceled"),
+			Entry("DNS failure", &net.DNSError{Err: "no such host", Name: "api-backend"}, "dns"),
+			Entry("connection refused", &net.OpError{Op: "dial", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}, "connection_refused"),
+			Entry("TLS verification", &tls.CertificateVerificationError{Err: errors.New("bad cert")}, "tls"),
+			Entry("net timeout", &net.OpError{Op: "read", Err: timeoutNetError{}}, "timeout"),
+			Entry("generic network error", &net.OpError{Op: "read", Err: errors.New("connection reset")}, "connection"),
+			Entry("opaque error", errors.New("boom"), "unknown"),
+		)
 	})
 
 	Describe("hop-by-hop header sanitization", func() {

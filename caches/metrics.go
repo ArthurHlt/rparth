@@ -30,26 +30,30 @@ var (
 			Buckets: prometheus.DefBuckets,
 		},
 	)
+)
 
-	cacheSize = promauto.NewGauge(
+type CacheMetrics struct {
+	next          Cache
+	cacheSizeProm prometheus.GaugeFunc
+}
+
+func NewCacheMetrics(cache Cache) *CacheMetrics {
+	cm := &CacheMetrics{next: cache}
+	cm.cacheSizeProm = promauto.NewGaugeFunc(
 		prometheus.GaugeOpts{
 			Name: "cache_size",
 			Help: "Number of items in cache",
 		},
+		func() float64 {
+			return float64(cm.next.Len())
+		},
 	)
-)
-
-type CacheMetrics struct {
-	next Cache
-}
-
-func NewCacheMetrics(cache Cache) *CacheMetrics {
-	return &CacheMetrics{next: cache}
+	return cm
 }
 
 func (c *CacheMetrics) Get(key string) (*models.CacheData, bool) {
 	startTime := time.Now()
-	contains := c.next.Contains(key)
+
 	data, ok := c.next.Get(key)
 	if ok {
 		cacheHits.Inc()
@@ -57,22 +61,18 @@ func (c *CacheMetrics) Get(key string) (*models.CacheData, bool) {
 	} else {
 		cacheMisses.Inc()
 	}
-	// only decrement cache size if the key was not found and existed before
-	if !ok && contains {
-		cacheSize.Dec()
-	}
 	return data, ok
 }
 
 func (c *CacheMetrics) Set(key string, data *models.CacheData) {
 	c.next.Set(key, data)
-	cacheSize.Inc()
-}
-
-func (c *CacheMetrics) Contains(key string) bool {
-	return c.next.Contains(key)
 }
 
 func (c *CacheMetrics) Close() error {
+	prometheus.DefaultRegisterer.Unregister(c.cacheSizeProm)
 	return c.next.Close()
+}
+
+func (c *CacheMetrics) Len() int {
+	return c.next.Len()
 }

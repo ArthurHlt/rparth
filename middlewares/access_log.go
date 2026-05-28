@@ -14,13 +14,8 @@ func AccessLog(level slog.Level) Middleware {
 		Schema:        httplog.SchemaOTEL,
 		RecoverPanics: true,
 		LogExtraAttrs: func(req *http.Request, reqBody string, respStatus int) []slog.Attr {
-			route := contexts.GetRPRoute(req)
-			routeName := "unknown"
-			if route != nil {
-				routeName = route.Name
-			}
 			return []slog.Attr{
-				slog.String("route_name", routeName),
+				slog.String("route_name", contexts.GetRouteName(req)),
 			}
 		},
 	})

@@ -49,17 +49,6 @@ var _ = Describe("RedisCache", func() {
 		})
 	})
 
-	Describe("Contains", func() {
-		It("returns false for an absent key", func() {
-			Expect(cache.Contains("absent")).To(BeFalse())
-		})
-
-		It("returns true after Set", func() {
-			cache.Set("a", sampleA)
-			Expect(cache.Contains("a")).To(BeTrue())
-		})
-	})
-
 	Describe("TTL", func() {
 		It("returns miss once the TTL has elapsed", func() {
 			cache.Set("a", sampleA)
@@ -73,6 +62,19 @@ var _ = Describe("RedisCache", func() {
 		It("stores keys under the 'rparth:' prefix", func() {
 			cache.Set("a", sampleA)
 			Expect(mr.Keys()).To(ConsistOf("rparth:a"))
+		})
+	})
+
+	Describe("Len", func() {
+		It("returns 0 when the cache is empty", func() {
+			Expect(cache.Len()).To(Equal(0))
+		})
+
+		It("counts only keys under the 'rparth:' prefix", func() {
+			cache.Set("a", sampleA)
+			cache.Set("b", sampleA)
+			Expect(mr.Set("other", "x")).To(Succeed())
+			Expect(cache.Len()).To(Equal(2))
 		})
 	})
 
