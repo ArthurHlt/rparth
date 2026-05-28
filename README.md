@@ -1,8 +1,42 @@
 # rparth
 
-A small, fast reverse proxy shipped as a single Go binary (and a container image). It does prefix/host based
+A small reverse proxy shipped as a single Go binary for an interview. It does prefix/host based
 routing, response streaming, request forwarding headers (RFC 7239), an optional response cache (in-process LRU or
 shared Redis), Prometheus metrics, and structured access logs.
+
+Websocket are not supported in this reverse proxy to simplify the implementation.
+
+> [!IMPORTANT]
+> For the interviewer
+>
+> Commit titles follow the Conventional Commits specification, while the commit bodies are intentionally written as a
+> development log.
+>
+> The goal is to provide visibility into my workflow, technical reasoning, and decision-making process throughout the
+> project.
+>
+> This is not something I would typically do in a real production project, but I believe it makes the project's
+> evolution and technical choices easier to follow for the reader.
+
+
+> [!NOTE]
+> About my use of AI
+>
+> AI is now an inevitable part of modern software development.
+>
+> Here is how I currently use it:
+>
+> 1. I write most of the code myself, while using AI-assisted IDE auto-completion. I only rely more heavily on AI when
+     the implementation is straightforward and the requirements are already clearly defined.
+>
+> 2. I use AI generation mostly to generate documentation, and tests, but I always review, validate, and refine the
+     generated output.
+>
+> 3. I also use AI to review my changes, while keeping the final triage, decisions, and improvements under my own
+     responsibility.
+>
+> In summary, I do not primarily use AI to save time, but rather to reduce repetitive/bothering work and help improve
+> software quality or at least my PR quality in real life.
 
 ## Features
 
@@ -45,8 +79,7 @@ rparth version
 ### Running with Docker
 
 The image sets no working directory, so the container runs at `/` and `rparth serve` looks for `/config.yml` by
-default. Mount your config (and TLS files, if any) there. Make sure `listen_addr` is **not** loopback
-(`127.0.0.1`) or the published port is unreachable from the host.
+default. Mount your config (and TLS files, if any) there.
 
 ```bash
 docker run --rm -p 8443:8443 \
@@ -81,19 +114,19 @@ Notation: a field wrapped in `[ ]` is optional. Required fields have no brackets
 # A list of routes, evaluated top-to-bottom; the first one that matches wins.
 # At least one route is required.
 routes:
-  [ - <route> ... ]
+  [- <route> ...]
 
-# HTTP/HTTPS server settings.
-[ server: <server> ]
+    # HTTP/HTTPS server settings.
+    [server: <server>]
 
-# Logging settings.
-[ log: <log> ]
+    # Logging settings.
+    [log: <log>]
 
-# Response cache settings. The cache is disabled unless exactly one of `lru` or `redis` is set.
-[ cache: <cache> ]
+    # Response cache settings. The cache is disabled unless exactly one of `lru` or `redis` is set.
+    [cache: <cache>]
 
-# Upstream HTTP transport tuning.
-[ transport: <transport> ]
+    # Upstream HTTP transport tuning.
+    [transport: <transport>]
 ```
 
 ### `<route>`
@@ -105,34 +138,34 @@ name: <string>
 # Upstream URL that matched requests are proxied to, e.g. http://backend:8080.
 target: <url>
 
-# Incoming request Host to match (compared without port). If omitted, the route matches any host.
-[ host: <string> ]
+  # Incoming request Host to match (compared without port). If omitted, the route matches any host.
+  [host: <string>]
 
-# URL path prefix to match.
-[ prefix: <string> | default = "/" ]
+  # URL path prefix to match.
+  [prefix: <string> | default = "/"]
 
-# Strip the matched `prefix` from the path sent upstream.
-[ strip_prefix: <boolean> | default = true ]
+  # Strip the matched `prefix` from the path sent upstream.
+  [strip_prefix: <boolean> | default = true]
 
-# Per-request upstream timeout, in seconds.
-[ timeout: <seconds> | default = 30 ]
+  # Per-request upstream timeout, in seconds.
+  [timeout: <seconds> | default = 30]
 
-# Disable response caching for this route only.
-[ no_cache: <boolean> | default = false ]
+  # Disable response caching for this route only.
+  [no_cache: <boolean> | default = false]
 
 # Extra headers added to the upstream request. Header names are canonicalized; each value is a list.
 headers:
-  [ <string>: [ <string>, ... ] ... ]
+  [<string>: [<string>, ...] ...]
 ```
 
 ### `<server>`
 
 ```yaml
 # Address to bind, as host:port. Use ":8443" or "0.0.0.0:8443" to accept external traffic.
-[ listen_addr: <string> | default = ":8080" ]
+[listen_addr: <string> | default = ":8080"]
 
-# Enable HTTPS. When present, both fields below are required.
-[ tls: <tls> ]
+  # Enable HTTPS. When present, both fields below are required.
+  [tls: <tls>]
 ```
 
 ### `<tls>`
@@ -147,36 +180,36 @@ key_file: <filename>
 
 ```yaml
 # Minimum log level: one of debug | info | warn | error.
-[ level: <string> | default = "info" ]
+[level: <string> | default = "info"]
 
-# Disable ANSI colors in the human-readable logger.
-[ no_color: <boolean> | default = false ]
+  # Disable ANSI colors in the human-readable logger.
+  [no_color: <boolean> | default = false]
 
-# Emit JSON logs instead of the human-readable (tint) format.
-[ in_json: <boolean> | default = false ]
+  # Emit JSON logs instead of the human-readable (tint) format.
+  [in_json: <boolean> | default = false]
 ```
 
 ### `<cache>`
 
 ```yaml
 # Maximum cacheable response body size, in bytes. Larger responses are streamed through but not cached.
-[ max_size_item: <bytes> | default = 1048576 ]   # 1 MiB
+[max_size_item: <bytes> | default = 1048576]   # 1 MiB
 
-# In-process LRU cache. Mutually exclusive with `redis`.
-[ lru: <lru> ]
+  # In-process LRU cache. Mutually exclusive with `redis`.
+  [lru: <lru>]
 
-# Shared Redis cache. Mutually exclusive with `lru`.
-[ redis: <redis> ]
+  # Shared Redis cache. Mutually exclusive with `lru`.
+  [redis: <redis>]
 ```
 
 ### `<lru>`
 
 ```yaml
 # Maximum number of cached entries.
-[ size: <int> | default = 100 ]
+[size: <int> | default = 100]
 
-# Time-to-live per entry.
-[ ttl: <duration> | default = 10m ]
+  # Time-to-live per entry.
+  [ttl: <duration> | default = 10m]
 ```
 
 ### `<redis>`
@@ -185,33 +218,33 @@ key_file: <filename>
 # Connection URL, e.g. redis://user:password@host:6379/0 (rediss:// for TLS).
 url: <url>
 
-# Time-to-live per entry.
-[ ttl: <duration> | default = 10m ]
+  # Time-to-live per entry.
+  [ttl: <duration> | default = 10m]
 ```
 
 ### `<transport>`
 
 ```yaml
 # Total upstream request timeout (dialing).
-[ timeout: <duration> | default = 30s ]
+[timeout: <duration> | default = 30s]
 
-# Keep-alive interval for upstream connections.
-[ keepalive: <duration> | default = 30s ]
+  # Keep-alive interval for upstream connections.
+  [keepalive: <duration> | default = 30s]
 
-# Maximum number of idle upstream connections across all hosts.
-[ max_idle_conns: <int> | default = 1000 ]
+  # Maximum number of idle upstream connections across all hosts.
+  [max_idle_conns: <int> | default = 1000]
 
-# Maximum number of idle upstream connections per host.
-[ max_idle_conns_per_host: <int> | default = 100 ]
+  # Maximum number of idle upstream connections per host.
+  [max_idle_conns_per_host: <int> | default = 100]
 
-# How long an idle upstream connection is kept before closing.
-[ idle_conn_timeout: <duration> | default = 30s ]
+  # How long an idle upstream connection is kept before closing.
+  [idle_conn_timeout: <duration> | default = 30s]
 
-# How long to wait for the upstream response headers after the request is written.
-[ response_header_timeout: <duration> | default = 30s ]
+  # How long to wait for the upstream response headers after the request is written.
+  [response_header_timeout: <duration> | default = 30s]
 
-# TLS handshake timeout for upstream connections.
-[ tls_handshake_timeout: <duration> | default = 10s ]
+  # TLS handshake timeout for upstream connections.
+  [tls_handshake_timeout: <duration> | default = 10s]
 ```
 
 ## Caching behavior
@@ -233,20 +266,20 @@ When a cache backend is configured, responses are cached subject to these rules:
 A Prometheus exposition is served on `GET /_metrics`. Access logs are emitted per request using the OTEL log
 schema, labeled with the matched `route_name`.
 
-| Metric | Type | Labels | Description |
-| --- | --- | --- | --- |
-| `rparth_build_info` | gauge | `version`, `commit`, `date` | Always `1`; the build metadata is carried in the labels. |
-| `http_requests_total` | counter | `route_name`, `method`, `status` | Requests handled by the full middleware chain, including cache hits. |
-| `http_request_duration_seconds` | histogram | `route_name`, `method`, `status` | Request duration measured across the full middleware chain. |
-| `http_requests_in_flight` | gauge | `route_name` | Requests currently being handled. |
-| `http_proxy_requests_total` | counter | `route_name`, `method`, `status` | Requests forwarded upstream (proxy layer only; excludes cache hits). |
-| `http_proxy_request_duration_seconds` | histogram | `route_name`, `method`, `status` | Duration of upstream requests only. |
-| `http_proxy_errors_total` | counter | `route_name`, `method`, `reason` | Upstream requests that failed before a response was received, by `reason` (see below). |
-| `cache_hits_total` | counter | — | Number of cache hits. |
-| `cache_misses_total` | counter | — | Number of cache misses. |
-| `cache_lookup_latency_seconds` | histogram | — | Cache lookup latency, observed on hits. |
-| `cache_size` | gauge | — | Number of items currently in the cache (sampled at scrape time). |
-| `cache_skip_total` | counter | `route_name`, `reason` | Responses that were not cached, by `reason` (see below). |
+| Metric                                | Type      | Labels                           | Description                                                                            |
+|---------------------------------------|-----------|----------------------------------|----------------------------------------------------------------------------------------|
+| `rparth_build_info`                   | gauge     | `version`, `commit`, `date`      | Always `1`; the build metadata is carried in the labels.                               |
+| `http_requests_total`                 | counter   | `route_name`, `method`, `status` | Requests handled by the full middleware chain, including cache hits.                   |
+| `http_request_duration_seconds`       | histogram | `route_name`, `method`, `status` | Request duration measured across the full middleware chain.                            |
+| `http_requests_in_flight`             | gauge     | `route_name`                     | Requests currently being handled.                                                      |
+| `http_proxy_requests_total`           | counter   | `route_name`, `method`, `status` | Requests forwarded upstream (proxy layer only; excludes cache hits).                   |
+| `http_proxy_request_duration_seconds` | histogram | `route_name`, `method`, `status` | Duration of upstream requests only.                                                    |
+| `http_proxy_errors_total`             | counter   | `route_name`, `method`, `reason` | Upstream requests that failed before a response was received, by `reason` (see below). |
+| `cache_hits_total`                    | counter   | —                                | Number of cache hits.                                                                  |
+| `cache_misses_total`                  | counter   | —                                | Number of cache misses.                                                                |
+| `cache_lookup_latency_seconds`        | histogram | —                                | Cache lookup latency, observed on hits.                                                |
+| `cache_size`                          | gauge     | —                                | Number of items currently in the cache (sampled at scrape time).                       |
+| `cache_skip_total`                    | counter   | `route_name`, `reason`           | Responses that were not cached, by `reason` (see below).                               |
 
 The `cache_*` metrics are only emitted when a cache backend is configured.
 
@@ -254,27 +287,27 @@ The `cache_*` metrics are only emitted when a cache backend is configured.
 
 `http_proxy_errors_total` classifies each upstream failure into one of:
 
-| `reason` | Meaning |
-| --- | --- |
-| `timeout` | The upstream did not respond within the route/transport timeout (includes context deadline). |
-| `canceled` | The client disconnected before the upstream responded (context canceled). |
-| `dns` | The upstream host could not be resolved. |
-| `connection_refused` | The upstream refused the TCP connection. |
-| `tls` | The upstream TLS handshake/certificate verification failed. |
-| `connection` | Other network-level failure (reset, unreachable, broken pipe, …). |
-| `unknown` | An error that did not match any of the above. |
+| `reason`             | Meaning                                                                                      |
+|----------------------|----------------------------------------------------------------------------------------------|
+| `timeout`            | The upstream did not respond within the route/transport timeout (includes context deadline). |
+| `canceled`           | The client disconnected before the upstream responded (context canceled).                    |
+| `dns`                | The upstream host could not be resolved.                                                     |
+| `connection_refused` | The upstream refused the TCP connection.                                                     |
+| `tls`                | The upstream TLS handshake/certificate verification failed.                                  |
+| `connection`         | Other network-level failure (reset, unreachable, broken pipe, …).                            |
+| `unknown`            | An error that did not match any of the above.                                                |
 
 `cache_skip_total` records why a cacheable path was not stored:
 
-| `reason` | Meaning |
-| --- | --- |
-| `disabled` | The matched route has `no_cache: true`. |
-| `method_not_allowed` | The request method is not `GET`. |
-| `cache_control` | The request or response asked to bypass the cache (`no-store`/`no-cache`/`private`). |
-| `too_large` | The response body exceeded `cache.max_size_item`. |
-| `status_code` | The response status was `< 200` or `>= 400`. |
-| `set_cookie` | The response set a `Set-Cookie` header (per-client). |
-| `vary` | The response carried a `Vary` header. |
+| `reason`             | Meaning                                                                              |
+|----------------------|--------------------------------------------------------------------------------------|
+| `disabled`           | The matched route has `no_cache: true`.                                              |
+| `method_not_allowed` | The request method is not `GET`.                                                     |
+| `cache_control`      | The request or response asked to bypass the cache (`no-store`/`no-cache`/`private`). |
+| `too_large`          | The response body exceeded `cache.max_size_item`.                                    |
+| `status_code`        | The response status was `< 200` or `>= 400`.                                         |
+| `set_cookie`         | The response set a `Set-Cookie` header (per-client).                                 |
+| `vary`               | The response carried a `Vary` header.                                                |
 
 ## Development
 
