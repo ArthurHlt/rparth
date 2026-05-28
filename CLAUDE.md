@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-A reverse proxy (`github.com/ArthurHlt/rparth`, Go 1.26) shipped as a single binary. `main.go` is a Kong CLI with two
-commands: `serve` (reads `./config.yml` by default, runs the proxy) and `version`. Configuration is YAML and validated
-at decode time.
+A reverse proxy (`github.com/ArthurHlt/rparth`, Go 1.26) shipped as a single binary and a container image on ghcr.
+`main.go` is a Kong CLI with two commands: `serve` (reads `./config.yml` by default, runs the proxy) and `version`.
+Configuration is YAML and validated at decode time.
 
 ## Commands
 
@@ -142,6 +142,39 @@ The HTTP-level cache logic is in `middlewares/cache.go`:
     full chain including cache hits).
   - `http_proxy_requests_total{...}` / `http_proxy_request_duration_seconds` — proxy-level (only upstream calls).
   - `cache_hits_total` / `cache_misses_total` / `cache_lookup_latency_seconds` / `cache_size`.
+
+## Release & container image
+
+CI (`.github/workflows/test.yml`) runs the Ginkgo suite and `golangci-lint` on every push to `main` and every PR.
+Releases are cut by pushing a `v*` tag, which triggers `.github/workflows/release.yml` → GoReleaser
+(`goreleaser release --clean`).
+
+- **Version injection is implicit.** `main.version` / `main.commit` / `main.date` are filled by GoReleaser's *default*
+  ldflags (`-X main.version=… -X main.commit=… -X main.date=…`). There is deliberately **no `ldflags:` block** in
+  `.goreleaser.yaml` — the var names already match the defaults. Renaming those vars silently breaks `rparth version`.
+- **Container image** is built by the `dockers_v2` block and pushed to `ghcr.io/arthurhlt/rparth` (`:{{ .Version }}`,
+  plus `:latest` for non-prerelease tags). `platforms:` is unset, so it defaults to `linux/amd64,linux/arm64` (multi-arch
+  manifest). The release workflow sets up buildx and logs in to ghcr with `GITHUB_TOKEN`; the job needs
+  `packages: write`. No QEMU is needed because the Dockerfile is `COPY`-only (no `RUN` executes target-arch code) — the
+  binaries are cross-compiled by Go, not emulated.
+- **Dockerfile** is `FROM alpine` and copies the prebuilt binary via `COPY $TARGETPLATFORM/rparth /usr/bin/`. That
+  `<os>/<arch>/rparth` context layout is created by `dockers_v2`/buildx, **not** by a plain `docker build`. To build the
+  image by hand you must recreate it (use your host arch, e.g. `arm64` on Apple Silicon):
+
+  ```bash
+  mkdir -p /tmp/ctx/linux/arm64
+  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/ctx/linux/arm64/rparth .
+  cp Dockerfile /tmp/ctx/
+  docker build --build-arg TARGETPLATFORM=linux/arm64 -t rparth:test /tmp/ctx
+  ```
+- **Runtime config resolution.** The image sets no `WORKDIR`, so the container cwd is `/` (a Docker default, not an
+  alpine one). The proxy's default `./config.yml` therefore resolves to `/config.yml`, and the *relative*
+  `cert_file`/`key_file` in the config resolve against cwd too — so mount config + certs at `/`, or pass an absolute
+  `serve -c <path>`, or set `docker run -w <dir>`. Also note `listen_addr` must not be loopback (`127.0.0.1`) inside a
+  container or the published port is unreachable from the host.
+- Validate config edits with `goreleaser check`. `goreleaser release --snapshot --clean` dry-runs the whole pipeline,
+  but the multi-arch image it builds can't be `--load`ed into the local daemon — use the manual build above for local
+  image testing.
 
 ## Conventions
 
